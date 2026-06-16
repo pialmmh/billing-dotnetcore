@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+option csharp_namespace = "Telcobright.Billing.V1";
+
+package telcobright.billing.v1;
+
+// Rating + CDR + summary service. routesphere (the live call/SMS platform) calls this
+// over gRPC.
+//
+// Division of responsibility (the handoff):
+//   routesphere KEEPS : tenant identification, routing (where to send the call),
+//                       admission gating, mem-ledger reserve/debit, signaling, state.
+//   THIS SERVICE OWNS : service-group/family categorization, rating (first-unit + final),
+//                       CDR write, and summary generation (operator now; res_NNN later).
+service RatingService {
+  // BEFORE the call/SMS, during admission. Categorizes the event (service group/family)
+  // and returns the first-unit max rate per resolved level -- first MINUTE for a call,
+  // first/only MESSAGE for SMS. routesphere reserves `amount_to_reserve` in mem-ledger.
+  rpc GetFirstUnitRate (FirstUnitRateRequest) returns (FirstUnitRateResponse);
+
+  // AFTER the call/SMS. Runs full rating, writes the CDR, and rolls up summaries into
+  // the operator schema (and, later, each reseller res_NNN schema). Returns the final
+  // per-level settlement so routesphere can settle mem-ledger (debit final / refund rest).
+  rpc FinalizeAndSummarize (FinalizeRequest) returns (FinalizeResponse);
+}
+
+enum ChargeKind {
+  CHARGE_KIND_UNSPECIFIED = 0;
+  CALL = 1;
+  SMS  = 2;
+}
+
+enum AssignDirection {
+  ASSIGN_DIRECTION_UNSPECIFIED = 0;
+  CUSTOMER = 1;   // charge the InPartner side
+  SUPPLIER = 2;   // charge the OutPartner side
+}
+
+// Immutable facts of a call/SMS, known at admission time.
+message CallFacts {
+  string tenant            = 1;  // operator tenant name (= telcobrightpartner / DynamicContext key)
+  ChargeKind kind          = 2;
+  string caller_number     = 3;
+  string called_number     = 4;
+  string source_ip         = 5;
+  string sip_username      = 6;
+  string source_domain     = 7;
+  string incoming_route    = 8;  // trunk/route name, if routesphere resolved it
+  string outgoing_route    = 9;
+  int32  switch_id         = 10;
+  string session_id        = 11; // FreeSWITCH channel uuid / unique id
+  string sip_call_id       = 12;
+  bool   inbound           = 13;
+  int64  start_epoch_millis= 14; // UTC epoch millis
+}
+
+// A resolved level in the charge chain. Depth 0 = operator/admin; 1..5 = resellers.
+// routesphere resolves the partner chain during tenant-chain admission and passes it;
+// this service enriches each level with service-group/family + rate.
+message Level {
+  int32  depth              = 1;
+  int32  partner_id         = 2;
+  string partner_name       = 3;
+  int32  package_account_id = 4; // mem-ledger PackageAccount id routesphere reserves against
+  AssignDirection direction = 5;
+}
+
+message FirstUnitRateRequest {
+  CallFacts facts      = 1;
+  repeated Level levels= 2;       // admin-only slice: exactly one level (the operator)
+}
+
+// Per-level rating result.
+message LevelRate {
+  int32  depth            = 1;
+  int32  partner_id       = 2;
+  int32  service_group_id = 3;
+  int32  service_family_id= 4;
+  string matched_prefix   = 5;
+  string country_code     = 6;
+  AssignDirection direction = 7;
+  string uom              = 8;    // BDT (cash) | TF_min | OTH_ea (package units)
+  double rate_amount      = 9;    // rate per billing span
+  int32  billing_span_sec = 10;   // 60 = per-minute (voice); 1 = flat per-message (SMS)
+  double first_unit_amount= 11;   // charge for the first unit -- basis for the reserve
+}
+
+message FirstUnitRateResponse {
+  bool   success           = 1;
+  string reject_reason     = 2;   // non-empty => admission should reject the call
+  repeated LevelRate levels= 3;
+  int32  charged_depth     = 4;   // level routesphere reserves against (operator in slim slice)
+  double amount_to_reserve = 5;
+  string reserve_uom       = 6;
+}
+
+message FinalizeRequest {
+  CallFacts facts        = 1;
+  repeated Level levels  = 2;
+  int64  answer_epoch_millis = 3;
+  int64  end_epoch_millis    = 4;
+  int32  billsec         = 5;     // answered/billable seconds
+  int32  ring_seconds    = 6;
+  bool   answered        = 7;
+  string hangup_cause    = 8;
+  string receiver_ip     = 9;
+  string read_codec      = 10;
+  double reserved_amount = 11;    // what routesphere reserved (for reconciliation)
+}
+
+// Per-level final settlement. routesphere applies charged_amount to mem-ledger.
+message LevelSettlement {
+  int32  depth            = 1;
+  int32  partner_id       = 2;
+  string uom              = 3;
+  double charged_amount   = 4;
+  double package_amount   = 5;    // billable minutes for package units (0 for BDT cash)
+  double in_partner_cost  = 6;    // cash cost for BDT (0 for package units)
+  string matched_prefix   = 7;
+  int32  service_group_id = 8;
+  int32  service_family_id= 9;
+}
+
+message FinalizeResponse {
+  bool   success           = 1;
+  string error             = 2;
+  string cdr_id            = 3;
+  bool   cdr_written       = 4;
+  bool   summary_written   = 5;
+  repeated LevelSettlement settlements = 6;
+  double total_charged     = 7;
+}

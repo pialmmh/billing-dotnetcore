@@ -1,0 +1,30 @@
+# CCL — production profile for telcobright-billing-core.
+# Same shape as profile-dev.yml; prod points at the HA config-manager + Kafka cluster
+# and turns the config-event trigger on. Secrets (if any) come from OpenBao, not here.
+
+billing:
+  tenant:
+    profiles:
+      prod:
+        name: "CCL Prod"
+        active: true
+        environment: "production"
+
+  config-manager:
+    base-url: "http://10.9.9.2:7072"
+    tenant-root-endpoint: "/get-specific-tenant-root"
+    global-registry-endpoint: "/get-global-tenant-registry"
+    timeout-seconds: 30
+
+  config-events:
+    enabled: true
+    bootstrap-servers: "10.10.199.20:9092,10.10.198.20:9092,10.10.197.20:9092"
+    event-topic-base: "config_event_loader"
+    consumer-group-base: "billing-core-config-reload"
+    debounce-ms: 3000
+    idle-fast-path-multiplier: 2
+
+  mediation:
+    voice-enabled: true
+    sms-enabled: false
+    reseller-fanout-enabled: false

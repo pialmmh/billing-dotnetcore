@@ -1,0 +1,15 @@
+# Tenant enablement registry for telcobright-billing-core.
+#
+# Mirrors routesphere `application.properties` (tenants[i].{name,enabled,profile}):
+# this file says WHICH tenants this billing-core instance loads and the ACTIVE
+# profile per tenant. It deliberately does NOT declare the tenant hierarchy
+# (parent / dbName / children) — exactly like routesphere, that comes from
+# config-manager at startup (POST /get-specific-tenant-root) and is built into
+# the in-memory Tenant tree.
+#
+# Per-tenant settings live under config/tenants/<name>/<profile>/profile-<profile>.yml.
+
+tenants:
+  - name: ccl
+    enabled: true
+    profile: dev
