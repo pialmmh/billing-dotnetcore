@@ -13,21 +13,22 @@ package telcobright.billing.v1;
 //   THIS SERVICE OWNS : service-group/family categorization, rating (first-unit + final),
 //                       CDR write, and summary generation (operator now; res_NNN later).
 service RatingService {
-  // BEFORE the call/SMS, during admission. Categorizes the event (service group/family)
-  // and returns the first-unit max rate per resolved level -- first MINUTE for a call,
-  // first/only MESSAGE for SMS. routesphere reserves `amount_to_reserve` in mem-ledger.
-  rpc GetFirstUnitRate (FirstUnitRateRequest) returns (FirstUnitRateResponse);
+  // BEFORE the call/SMS, during admission. routesphere sends ONLY the call facts (no levels,
+  // no balances); this service derives the tenant's ancestor chain (leaf->root) and returns a
+  // per-tier result map keyed by dbName. routesphere reserves the first FUNDED candidate of each
+  // tier in mem-ledger, compensating earlier tiers on any tier's failure.
+  rpc GetMaxRatePerMinute (MaxRateRequest) returns (MaxRateReply);
 
-  // AFTER the call/SMS. Runs full rating, writes the CDR, and rolls up summaries into
-  // the operator schema (and, later, each reseller res_NNN schema). Returns the final
-  // per-level settlement so routesphere can settle mem-ledger (debit final / refund rest).
+  // AFTER the call/SMS. Runs full rating, writes the CDR, and rolls up summaries into the operator
+  // schema (and, later, each reseller res_NNN schema). Returns the final per-level settlement so
+  // routesphere can settle mem-ledger (debit final / refund rest).
   rpc FinalizeAndSummarize (FinalizeRequest) returns (FinalizeResponse);
 }
 
-enum ChargeKind {
-  CHARGE_KIND_UNSPECIFIED = 0;
-  CALL = 1;
-  SMS  = 2;
+enum ServiceType {
+  SERVICE_TYPE_UNSPECIFIED = 0;
+  VOICE = 1;
+  SMS   = 2;
 }
 
 enum AssignDirection {
@@ -36,62 +37,70 @@ enum AssignDirection {
   SUPPLIER = 2;   // charge the OutPartner side
 }
 
+// ---- GetMaxRatePerMinute (admission) -------------------------------------------------
+
+// routesphere sends ONLY call facts -- no config, no balances, no chain.
+message MaxRateRequest {
+  string tenant            = 1;  // entry tenant dbName (leaf of the chain)
+  int32  partner_id        = 2;  // entry partner
+  string calling_number    = 3;
+  string called_number     = 4;
+  string source_ip         = 5;
+  ServiceType service_type = 6;
+  int64  start_epoch_millis= 7;
+}
+
+// One ranked option for a tier. routesphere reserves the first FUNDED one.
+message RateCandidate {
+  int64  package_account_id     = 1;  // mem-ledger PackageAccount id (eligible, ranked by this service)
+  string uom                    = 2;  // TF_min | OTH_ea | BDT
+  double rate_per_minute        = 3;
+  double max_amount_first_minute= 4;  // package -> 1 unit; cash -> rate
+}
+
+// One resolved tier in the charge chain. db_name is globally unique (admin = operator DB,
+// resellers = res_NNN), so it is the map key; partner_id (unique only within a DB) rides here.
+message TierResult {
+  string db_name        = 1;
+  int32  partner_id     = 2;
+  int32  service_group  = 3;       // category this service detected at this tier
+  string reject_reason  = 4;       // non-empty => this tier rejects
+  repeated RateCandidate candidates = 5;
+}
+
+message MaxRateReply {
+  bool   ok            = 1;        // false if any required tier rejects
+  string reject_reason = 2;
+  map<string, TierResult> tiers = 3;   // key = db_name (admin / res_NNN)
+}
+
+// ---- FinalizeAndSummarize (post-call) ------------------------------------------------
+
 // Immutable facts of a call/SMS, known at admission time.
 message CallFacts {
-  string tenant            = 1;  // operator tenant name (= telcobrightpartner / DynamicContext key)
-  ChargeKind kind          = 2;
+  string tenant            = 1;
+  ServiceType service_type = 2;
   string caller_number     = 3;
   string called_number     = 4;
   string source_ip         = 5;
   string sip_username      = 6;
   string source_domain     = 7;
-  string incoming_route    = 8;  // trunk/route name, if routesphere resolved it
+  string incoming_route    = 8;
   string outgoing_route    = 9;
   int32  switch_id         = 10;
-  string session_id        = 11; // FreeSWITCH channel uuid / unique id
+  string session_id        = 11;
   string sip_call_id       = 12;
   bool   inbound           = 13;
-  int64  start_epoch_millis= 14; // UTC epoch millis
+  int64  start_epoch_millis= 14;
 }
 
 // A resolved level in the charge chain. Depth 0 = operator/admin; 1..5 = resellers.
-// routesphere resolves the partner chain during tenant-chain admission and passes it;
-// this service enriches each level with service-group/family + rate.
 message Level {
   int32  depth              = 1;
   int32  partner_id         = 2;
   string partner_name       = 3;
-  int32  package_account_id = 4; // mem-ledger PackageAccount id routesphere reserves against
+  int32  package_account_id = 4;
   AssignDirection direction = 5;
-}
-
-message FirstUnitRateRequest {
-  CallFacts facts      = 1;
-  repeated Level levels= 2;       // admin-only slice: exactly one level (the operator)
-}
-
-// Per-level rating result.
-message LevelRate {
-  int32  depth            = 1;
-  int32  partner_id       = 2;
-  int32  service_group_id = 3;
-  int32  service_family_id= 4;
-  string matched_prefix   = 5;
-  string country_code     = 6;
-  AssignDirection direction = 7;
-  string uom              = 8;    // BDT (cash) | TF_min | OTH_ea (package units)
-  double rate_amount      = 9;    // rate per billing span
-  int32  billing_span_sec = 10;   // 60 = per-minute (voice); 1 = flat per-message (SMS)
-  double first_unit_amount= 11;   // charge for the first unit -- basis for the reserve
-}
-
-message FirstUnitRateResponse {
-  bool   success           = 1;
-  string reject_reason     = 2;   // non-empty => admission should reject the call
-  repeated LevelRate levels= 3;
-  int32  charged_depth     = 4;   // level routesphere reserves against (operator in slim slice)
-  double amount_to_reserve = 5;
-  string reserve_uom       = 6;
 }
 
 message FinalizeRequest {

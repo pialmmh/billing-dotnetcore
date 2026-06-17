@@ -46,8 +46,7 @@ internal static class ConfigManagerMapper
         return new MediationContext
         {
             Categories = dto.Categories ?? new Dictionary<int, ServiceCategory>(),
-            ServiceGroups = dto.ServiceGroups ?? [],
-            ServiceFamilies = dto.ServiceFamilies ?? [],
+            ServiceGroupRules = dto.ServiceGroupRules ?? [],
         };
     }
 }

@@ -1,5 +1,6 @@
 using Billing.Config.TenantConfigSync.Dependencies;
 using Billing.Config.TenantConfigSync.Spi;
+using Billing.Mediation.Rating;
 using Billing.Service.Config;
 using Billing.Service.Services;
 using Microsoft.Extensions.Options;
@@ -7,6 +8,9 @@ using Microsoft.Extensions.Options;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddGrpc();
+
+// The rating engine (stub rater for now; swapped for the real one when MediationContext lands).
+builder.Services.AddMediationRating();
 
 // --- Tenant config sync ---------------------------------------------------------------
 // On start, build every enabled tenant's DynamicContext (+ MediationContext) from

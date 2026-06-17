@@ -44,19 +44,26 @@ internal sealed class TenantHierarchyLoader
         {
             var sw = Stopwatch.StartNew();
             var roots = new List<Tenant>();
-            var failed = 0;
 
             foreach (var sel in _selection.Enabled)
             {
-                var tenant = await _client.GetTenantRootAsync(sel.Name, ct);
-                if (tenant is null)
+                Tenant tenant;
+                try
                 {
-                    failed++;
-                    // Degrade, don't crash: keep the tenant resolvable with an empty context until
-                    // config-manager is reachable. (dbName falls back to the configured name.)
-                    tenant = new Tenant { Name = sel.Name, DbName = sel.Name };
+                    tenant = await _client.GetTenantRootAsync(sel.Name, ct);
                 }
-                else if (_opts.DebugMode)
+                catch (ConfigManagerUnavailableException ex)
+                {
+                    // Fail-fast: refuse to serve an empty/partial context (it would silently mis-rate).
+                    // Nothing is swapped — on startup the app fails to start; on reload the last-good
+                    // snapshot keeps serving. Loud, then propagate.
+                    _log.LogError(ex,
+                        "config {Trigger} ABORTED — config-manager unavailable for tenant {Tenant}; "
+                        + "registry NOT swapped (keeping last-good config)", trigger, sel.Name);
+                    throw;
+                }
+
+                if (_opts.DebugMode)
                 {
                     _log.LogInformation("loaded tenant {Tenant} (db={Db}) partners={Partners} packages={Pkgs}",
                         tenant.Name, tenant.DbName, tenant.Context.Partners.Count,
@@ -69,11 +76,9 @@ internal sealed class TenantHierarchyLoader
 
             _registry.Swap(roots);
 
-            var evt = new ConfigReloadedEvent(trigger, roots.Count - failed, failed,
-                sw.ElapsedMilliseconds, eventId);
-            _log.LogInformation(
-                "config {Trigger}: {Ok} tenant(s) loaded, {Failed} degraded, {Ms} ms{Evt}",
-                trigger, evt.TenantsLoaded, evt.TenantsFailed, evt.DurationMs,
+            var evt = new ConfigReloadedEvent(trigger, roots.Count, sw.ElapsedMilliseconds, eventId);
+            _log.LogInformation("config {Trigger}: {Ok} tenant(s) loaded, {Ms} ms{Evt}",
+                trigger, evt.TenantsLoaded, evt.DurationMs,
                 eventId is null ? "" : $" (eventId={eventId})");
 
             Reloaded?.Invoke(this, evt);

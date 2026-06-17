@@ -25,6 +25,7 @@ public static class TenantConfigSyncRegistration
         services.AddSingleton<DebouncedReloader>();
 
         services.AddHostedService<TenantConfigHostedService>();
+        services.AddHostedService<DayBoundaryRefresher>();
         return services;
     }
 }

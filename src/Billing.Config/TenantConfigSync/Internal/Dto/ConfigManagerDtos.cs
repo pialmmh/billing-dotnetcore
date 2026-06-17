@@ -33,6 +33,5 @@ internal sealed class DynamicContextDto
 internal sealed class MediationContextDto
 {
     public Dictionary<int, ServiceCategory>? Categories { get; set; }
-    public List<ServiceGroupDef>? ServiceGroups { get; set; }
-    public List<ServiceFamilyDef>? ServiceFamilies { get; set; }
+    public List<ServiceGroupRule>? ServiceGroupRules { get; set; }
 }
