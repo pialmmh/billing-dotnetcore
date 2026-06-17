@@ -1,7 +1,7 @@
 using Billing.Config.TenantConfigSync.Dependencies;
 using Billing.Config.TenantConfigSync.Spi;
 using Billing.Mediation.Rating;
-using Billing.Service.Config;
+using Billing.Service.Adapters;
 using Billing.Service.Services;
 using Microsoft.Extensions.Options;
 
@@ -20,6 +20,9 @@ var selection = ProfileConfigReader.ReadSelection(configRoot);
 var configOptions = ProfileConfigReader.ReadOptions(configRoot, selection);
 
 builder.Services.AddTenantConfigSync(configOptions, selection);
+
+// Datasource for the post-call (summary) slice — loaded now; used when FinalizeAndSummarize lands.
+builder.Services.AddSingleton(Options.Create(ProfileConfigReader.ReadDatasource(configRoot, selection)));
 
 // The Kafka adapter is the host-provided config-event source — registered only when enabled,
 // so without it config loads once on start and never reloads (absence is a valid setup).

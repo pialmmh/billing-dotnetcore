@@ -60,13 +60,51 @@ public static class ProfileConfigReader
         return options;
     }
 
+    /// <summary>Reads the active profile's billing.datasource block (post-call slice). Non-secret only;
+    /// credentials are resolved from the secret store via secret-ref, never from here.</summary>
+    public static DatasourceOptions ReadDatasource(string configRoot, TenantSelection selection)
+    {
+        var options = new DatasourceOptions();
+
+        var active = selection.Enabled.FirstOrDefault();
+        if (active is null) return options;
+
+        var path = Path.Combine(configRoot, "tenants", active.Name, active.Profile,
+            $"profile-{active.Profile}.yml");
+        if (!File.Exists(path)) return options;
+
+        var ds = (Yaml.Deserialize<ProfileFile>(File.ReadAllText(path)) ?? new ProfileFile()).Billing?.Datasource;
+        if (ds is not null)
+        {
+            options.Host = ds.Host ?? "";
+            if (ds.Port > 0) options.Port = ds.Port;
+            options.AdminDb = ds.AdminDb ?? "";
+            options.ResellerDbPrefix = ds.ResellerDbPrefix ?? options.ResellerDbPrefix;
+            options.SecretRef = ds.SecretRef;
+        }
+        return options;
+    }
+
     // --- YAML wire shapes (kebab-case via hyphenated naming convention) ---
 
     private sealed class TenantsFile { public List<TenantRow>? Tenants { get; set; } }
     private sealed class TenantRow { public string? Name { get; set; } public bool Enabled { get; set; } public string? Profile { get; set; } }
 
     private sealed class ProfileFile { public BillingYaml? Billing { get; set; } }
-    private sealed class BillingYaml { public ConfigManagerYaml? ConfigManager { get; set; } public ConfigEventsYaml? ConfigEvents { get; set; } }
+    private sealed class BillingYaml
+    {
+        public ConfigManagerYaml? ConfigManager { get; set; }
+        public ConfigEventsYaml? ConfigEvents { get; set; }
+        public DatasourceYaml? Datasource { get; set; }
+    }
+    private sealed class DatasourceYaml
+    {
+        public string? Host { get; set; }
+        public int Port { get; set; }
+        public string? AdminDb { get; set; }
+        public string? ResellerDbPrefix { get; set; }
+        public string? SecretRef { get; set; }
+    }
     private sealed class ConfigManagerYaml
     {
         public string? BaseUrl { get; set; }

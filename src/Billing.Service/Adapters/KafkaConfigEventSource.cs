@@ -4,7 +4,7 @@ using Billing.Config.TenantConfigSync.Spi;
 using Confluent.Kafka;
 using Microsoft.Extensions.Options;
 
-namespace Billing.Service.Config;
+namespace Billing.Service.Adapters;
 
 /// <summary>
 /// The host-provided <see cref="IConfigEventSource"/>: a Kafka consumer over routesphere's
@@ -60,8 +60,11 @@ public sealed class KafkaConfigEventSource : IConfigEventSource
         return Task.CompletedTask;
     }
 
+    private const int ErrorBackoffSeconds = 5;
+
     private async Task ConsumeLoop(Func<ConfigChangeSignal, Task> onSignal, CancellationToken ct)
     {
+        var warned = false;   // log a recurring error ONCE, not on every poll
         try
         {
             while (!ct.IsCancellationRequested)
@@ -70,10 +73,19 @@ public sealed class KafkaConfigEventSource : IConfigEventSource
                 try
                 {
                     result = _consumer!.Consume(ct);
+                    warned = false;   // healthy again
                 }
                 catch (ConsumeException ex)
                 {
-                    _log.LogWarning(ex, "Kafka consume error; continuing");
+                    // e.g. the topic does not exist yet — expected until config-manager creates/publishes
+                    // to it. Log once, then back off and retry quietly instead of spamming every poll.
+                    if (!warned)
+                    {
+                        _log.LogWarning("Kafka consume error ({Reason}); retrying every {Backoff}s until it clears",
+                            ex.Error.Reason, ErrorBackoffSeconds);
+                        warned = true;
+                    }
+                    await Task.Delay(TimeSpan.FromSeconds(ErrorBackoffSeconds), ct);
                     continue;
                 }
                 if (result?.Message?.Value is not { } value) continue;

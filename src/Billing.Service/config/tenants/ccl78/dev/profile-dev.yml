@@ -16,28 +16,38 @@ billing:
   tenant:
     profiles:
       dev:
-        name: "CCL Dev"
+        name: "ccl78 dev"
         active: true
         environment: "development"
 
   # Where this service pulls each tenant's DynamicContext (+ MediationContext) from.
   # Same source routesphere uses; the DATA always travels over HTTP, never Kafka.
   config-manager:
-    base-url: "http://localhost:7072"
+    base-url: "http://103.95.96.78:7072"
     tenant-root-endpoint: "/get-specific-tenant-root"     # POST ?name=<tenant>
     global-registry-endpoint: "/get-global-tenant-registry"
-    timeout-seconds: 30
+    timeout-seconds: 180
 
   # Kafka config-change TRIGGER. An event only tells us "config changed, re-fetch";
   # it never carries the config itself. Same mechanism + 3000 ms trailing debounce
   # as routesphere's ConfigEventConsumer.
   config-events:
     enabled: true
-    bootstrap-servers: "10.10.198.20:9092"
+    bootstrap-servers: "103.95.96.78:9092"
     event-topic-base: "config_event_loader"               # actual topic = <base>_<tenant>
     consumer-group-base: "billing-core-config-reload"
     debounce-ms: 3000
     idle-fast-path-multiplier: 2                           # idle > 2x debounce => reload now
+
+  # Database for the post-call slice (FinalizeAndSummarize): write the CDR + roll up summaries
+  # into each tenant/reseller schema. NOT used by the rating path (that is config-manager-fed).
+  # Credentials are NOT here — resolved at startup from the secret store (OpenBao) via secret-ref.
+  datasource:
+    host: "103.95.96.77"
+    port: 3306
+    admin-db: "telcobright"                               # admin/operator schema; resellers = res_NNN
+    reseller-db-prefix: "res_"
+    secret-ref: "kv/billing/ccl78-dev-db"                   # OpenBao KV path: username + password
 
   # Mediation/rating module toggles (billing-core specific).
   mediation:

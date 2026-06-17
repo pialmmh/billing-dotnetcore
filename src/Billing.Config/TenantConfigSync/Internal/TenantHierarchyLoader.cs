@@ -81,6 +81,19 @@ internal sealed class TenantHierarchyLoader
                 trigger, evt.TenantsLoaded, evt.DurationMs,
                 eventId is null ? "" : $" (eventId={eventId})");
 
+            // Print the MediationContext each tenant received over HTTP (config-manager payload).
+            foreach (var root in roots)
+                foreach (var t in root.Index.Values)
+                {
+                    var mc = t.Context.MediationContext;
+                    _log.LogInformation(
+                        "  mediationContext [{Db}]: {Cats} categories, {Rules} serviceGroupRules{List}",
+                        t.DbName, mc.Categories.Count, mc.ServiceGroupRules.Count,
+                        mc.Categories.Count == 0
+                            ? ""
+                            : " — " + string.Join(", ", mc.Categories.Values.Select(c => $"{c.Id}:{c.Type}")));
+                }
+
             Reloaded?.Invoke(this, evt);
             return evt;
         }

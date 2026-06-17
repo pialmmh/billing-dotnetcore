@@ -10,6 +10,6 @@
 # Per-tenant settings live under config/tenants/<name>/<profile>/profile-<profile>.yml.
 
 tenants:
-  - name: ccl
+  - name: ccl78
     enabled: true
     profile: dev

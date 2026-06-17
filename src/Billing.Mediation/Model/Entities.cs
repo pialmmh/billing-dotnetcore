@@ -12,11 +12,8 @@ public sealed record Partner
 {
     public int IdPartner { get; init; }
     public string PartnerName { get; init; } = "";
-    /// <summary>Parent partner in the reseller chain; null = admin/root.</summary>
-    public int? IdParentPartner { get; init; }
-    public string? PartnerType { get; init; }
-    /// <summary>The reseller's own schema (admin DB or res_NNN).</summary>
-    public string? DatabaseName { get; init; }
+    /// <summary>config-manager serves partnerType as a number (EnumPartnerType id).</summary>
+    public int? PartnerType { get; init; }
 }
 
 /// <summary>A rate plan groups today's rates that apply to a set of partners.</summary>

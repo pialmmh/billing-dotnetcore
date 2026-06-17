@@ -6,7 +6,7 @@ billing:
   tenant:
     profiles:
       prod:
-        name: "CCL Prod"
+        name: "ccl78 prod"
         active: true
         environment: "production"
 
@@ -14,7 +14,7 @@ billing:
     base-url: "http://10.9.9.2:7072"
     tenant-root-endpoint: "/get-specific-tenant-root"
     global-registry-endpoint: "/get-global-tenant-registry"
-    timeout-seconds: 30
+    timeout-seconds: 180
 
   config-events:
     enabled: true
@@ -23,6 +23,14 @@ billing:
     consumer-group-base: "billing-core-config-reload"
     debounce-ms: 3000
     idle-fast-path-multiplier: 2
+
+  # DB for the post-call slice only (FinalizeAndSummarize). Credentials via OpenBao, never here.
+  datasource:
+    host: "103.95.96.77"
+    port: 3306
+    admin-db: "telcobright"
+    reseller-db-prefix: "res_"
+    secret-ref: "kv/billing/ccl78-prod-db"
 
   mediation:
     voice-enabled: true
