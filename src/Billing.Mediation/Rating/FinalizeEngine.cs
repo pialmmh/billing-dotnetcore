@@ -10,7 +10,7 @@ namespace Billing.Mediation.Rating;
 /// iterate the per-tier inputs, settle each, return the map keyed by dbName.
 ///
 /// Each tier currently settles the CUSTOMER leg via <see cref="BasicCharge"/> (detect SG → resolve rate
-/// plan → today RateCache → A2Z). The <see cref="TierMode.Full"/> admin extras (supplier leg + Sf
+/// plan tuples → PrefixMatcher → A2ZRater). The <see cref="TierMode.Full"/> admin extras (supplier leg + Sf
 /// families + extended AnsCost/BTRC/VAT legs) and the cdr/summary writes are the next slices — so a Full
 /// tier currently yields the same customer-leg number as a CustomerOnly tier.
 /// </summary>
@@ -72,6 +72,8 @@ public sealed class FinalizeEngine
         SwitchId = facts.SwitchId,
         IncomingRoute = facts.IncomingRoute,
         OutgoingRoute = facts.OutgoingRoute,
+        AnswerTime = facts.AnswerTime,
+        StartTime = facts.AnswerTime,
         ChargingStatus = facts.Answered ? 1 : 0,
     };
 }

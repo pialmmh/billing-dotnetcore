@@ -4,7 +4,7 @@ using MediationModel;
 namespace Billing.Mediation.ServiceGroups;
 
 /// <summary>The detected service group for a call plus the normalized chargeable number that the rate
-/// lookup (longest-prefix over the today-only RateCache) consumes.</summary>
+/// lookup (longest-prefix over the resolved rate-plan tuples' rateassigns) consumes.</summary>
 public readonly record struct ServiceGroupMatch(int ServiceGroupId, string RuleName, string NormalizedNumber);
 
 /// <summary>

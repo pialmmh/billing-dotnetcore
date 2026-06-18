@@ -24,9 +24,9 @@ public sealed record RatePlan
     public IReadOnlyList<int> PartnerIds { get; init; } = [];
 }
 
-/// <summary>One rate row (config-manager rateassign / today's-rates). Field names match the
-/// config-manager JSON so it deserializes fully — the A2Z charge math reads rateAmount + the
-/// pulse/surcharge fields (Resolution, MinDurationSec, SurchargeTime, SurchargeAmount).</summary>
+/// <summary>One rate row for the ADMISSION path (config-manager today's-rates, GetMaxRatePerMinute).
+/// The post-call rating/mediation path uses the verbatim legacy <c>rateassign</c> instead; this stays a
+/// lean record for the admission-side rate plan map.</summary>
 public sealed record Rate
 {
     public long Id { get; init; }
@@ -35,16 +35,10 @@ public sealed record Rate
     public decimal RateAmount { get; init; }
     public string? CountryCode { get; init; }
     public int Category { get; init; }
-
-    /// <summary>Pulse — round the billed duration UP to a multiple of this many seconds.</summary>
     public int Resolution { get; init; }
-    /// <summary>Minimum billable duration in seconds.</summary>
     public decimal MinDurationSec { get; init; }
-    /// <summary>Connect-charge threshold (seconds); at/after it, SurchargeAmount applies.</summary>
     public int SurchargeTime { get; init; }
-    /// <summary>Connect/setup charge added once.</summary>
     public decimal SurchargeAmount { get; init; }
-    /// <summary>1 = rate is inactive.</summary>
     public int Inactive { get; init; }
 }
 

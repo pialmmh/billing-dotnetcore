@@ -1,5 +1,6 @@
 using Billing.Mediation.Context;
 using Billing.Mediation.Model;
+using MediationModel;
 
 namespace Billing.Config.TenantConfigSync.Internal.Dto;
 
@@ -35,8 +36,9 @@ internal sealed class MediationContextDto
     public Dictionary<int, ServiceCategory>? Categories { get; set; }
     public List<ServiceGroupRule>? ServiceGroupRules { get; set; }
 
-    /// <summary>The rate-plan-assignment tuples (idService + direction + partner/route → rate plan)
-    /// config-manager serves from the existing rateplanassignmenttuple/rateassign tables. Absent until
-    /// it does, leaving the resolver empty.</summary>
-    public List<RatePlanAssignmentTuple>? RatePlanAssignmentTuples { get; set; }
+    /// <summary>The verbatim legacy rate-plan-assignment tuples (idService + AssignDirection +
+    /// idpartner/route + priority), each carrying its nested rateassigns. config-manager serves this
+    /// legacy-shaped JSON from the existing rateplanassignmenttuple/rateassign tables. Absent until it
+    /// does, leaving the resolver empty.</summary>
+    public List<rateplanassignmenttuple>? RatePlanAssignmentTuples { get; set; }
 }

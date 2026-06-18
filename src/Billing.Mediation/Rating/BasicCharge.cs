@@ -12,13 +12,13 @@ public readonly record struct BasicChargeResult(
 
 /// <summary>
 /// Wires the basic charge end to end for a single direction (the architect's "basic charge first" slice):
-/// detect the service group → resolve the rate-plan tuple by (idService, direction, partner/route) →
-/// longest-prefix the normalized number in the today-only RateCache → run the A2Z duration+amount math.
+/// detect the service group → resolve the rate-plan tuples by (idService, direction, partner/route) →
+/// <see cref="PrefixMatcher"/> longest-prefixes the normalized number over the tuples' rateassigns →
+/// <see cref="A2ZRater"/> runs the duration+amount math.
 ///
-/// One leg only (customer or supplier) — the per-tier admin(full)/reseller(customer-only) loop and the
-/// extended legs (AnsCost/BTRC/VAT) + cdr/summary writes come in the later slices. Route-scoped
-/// resolution is deferred (route id needs the switch/route map we do not load yet), so this passes the
-/// partner scope; <c>billingSpanSec</c> defaults to 60 (per-minute) until the rate plan supplies it.
+/// One leg only (customer or supplier). Route-scoped resolution is deferred (route id needs the
+/// switch/route map we do not load yet), so this passes the partner scope; <c>billingSpanSec</c> defaults
+/// to 60 (per-minute) until the rate plan supplies it.
 /// </summary>
 public sealed class BasicCharge
 {
@@ -39,16 +39,21 @@ public sealed class BasicCharge
         // Customer leg keys off the in-partner, supplier leg off the out-partner (legacy A2ZRater).
         var idPartner = direction == AssignmentDirection.Supplier ? cdr.OutPartnerId : cdr.InPartnerId;
 
-        var tuple = mediation.RatePlanResolver.Resolve(
+        var tuples = mediation.RatePlanResolver.Resolve(
             match.Value.ServiceGroupId, (int)direction, idPartner, route: null);
-        if (tuple is null) return null;
+        if (tuples.Count == 0) return null;
 
-        var rate = mediation.RateCache.FindRate(tuple.IdRatePlan, match.Value.NormalizedNumber);
+        var category = cdr.Category ?? 1;          // legacy defaults: 1 = call
+        var subCategory = cdr.SubCategory ?? 1;     //                  1 = voice
+        var answerTime = cdr.AnswerTime ?? cdr.StartTime;
+
+        var rate = new PrefixMatcher(tuples, category, subCategory, answerTime)
+            .MatchPrefix(match.Value.NormalizedNumber);
         if (rate is null) return null;
 
-        var charge = A2ZCharger.Compute(rate, cdr.DurationSec, billingSpanSec);
+        var charge = A2ZRater.Rate(rate, cdr.DurationSec, billingSpanSec);
         return new BasicChargeResult(
-            match.Value.ServiceGroupId, tuple.IdRatePlan, rate.Prefix ?? "",
+            match.Value.ServiceGroupId, (int)(rate.idrateplan ?? 0), rate.Prefix.ToString(),
             charge.BilledDurationSec, charge.Amount);
     }
 }

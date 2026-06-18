@@ -1,77 +1,73 @@
-using Billing.Mediation.Model;
+using MediationModel;
 
 namespace Billing.Mediation.Rating;
 
 /// <summary>
-/// Resolves which rate plan applies to a call — the lean port of legacy
-/// <c>A2ZRater.GetAssignmentTuples</c>. Tuples are indexed by the legacy key forms
+/// Resolves which rate-plan-assignment tuples apply to a call — the lean port of legacy
+/// <c>A2ZRater.GetAssignmentTuples</c>. Tuples are indexed by the legacy <c>GetTuple()</c> key forms
 /// (<c>idService/dir/route</c> and <c>idService/dir/idpartner</c>); resolution tries the route scope
-/// first, then the partner scope, and the lowest <c>priority</c> wins within a key.
-///
-/// The winning tuple's <see cref="RatePlanAssignmentTuple.IdRatePlan"/> then selects the plan in the
-/// today-only <see cref="RateCache"/>. (The legacy fed all matching tuples to PrefixMatcher to blend
-/// rates by prefix+priority; for the SG10/11 customer slice the lowest-priority tuple is enough — multi-
-/// tuple prefix blending is a deferred refinement.)
+/// first, then the partner scope, returning the matching tuples priority-ordered for
+/// <see cref="PrefixMatcher"/> to longest-prefix over their <c>rateassigns</c>.
 /// </summary>
 public sealed class RatePlanResolver
 {
-    private readonly IReadOnlyDictionary<string, IReadOnlyList<RatePlanAssignmentTuple>> _routeIndex;
-    private readonly IReadOnlyDictionary<string, IReadOnlyList<RatePlanAssignmentTuple>> _partnerIndex;
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<rateplanassignmenttuple>> _routeIndex;
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<rateplanassignmenttuple>> _partnerIndex;
 
     private RatePlanResolver(
-        IReadOnlyDictionary<string, IReadOnlyList<RatePlanAssignmentTuple>> routeIndex,
-        IReadOnlyDictionary<string, IReadOnlyList<RatePlanAssignmentTuple>> partnerIndex)
+        IReadOnlyDictionary<string, IReadOnlyList<rateplanassignmenttuple>> routeIndex,
+        IReadOnlyDictionary<string, IReadOnlyList<rateplanassignmenttuple>> partnerIndex)
     {
         _routeIndex = routeIndex;
         _partnerIndex = partnerIndex;
     }
 
-    public static RatePlanResolver Build(IReadOnlyList<RatePlanAssignmentTuple> tuples)
+    public static RatePlanResolver Build(IReadOnlyList<rateplanassignmenttuple> tuples)
     {
-        var route = new Dictionary<string, List<RatePlanAssignmentTuple>>();
-        var partner = new Dictionary<string, List<RatePlanAssignmentTuple>>();
+        var route = new Dictionary<string, List<rateplanassignmenttuple>>();
+        var partner = new Dictionary<string, List<rateplanassignmenttuple>>();
 
         foreach (var t in tuples)
         {
-            if (t.Route is > 0)
-                Add(route, RouteKey(t.IdService, t.AssignDirection, t.Route.Value), t);
-            else if (t.IdPartner is > 0)
-                Add(partner, PartnerKey(t.IdService, t.AssignDirection, t.IdPartner.Value), t);
+            if (t.route is > 0)
+                Add(route, RouteKey(t.idService, t.AssignDirection, t.route.Value), t);
+            else if (t.idpartner is > 0)
+                Add(partner, PartnerKey(t.idService, t.AssignDirection, t.idpartner.Value), t);
         }
 
         return new RatePlanResolver(Freeze(route), Freeze(partner));
     }
 
-    /// <summary>The best tuple for the call, or null if none is assigned. Route scope beats partner
-    /// scope; lowest priority wins.</summary>
-    public RatePlanAssignmentTuple? Resolve(int idService, int assignDirection, int? idPartner, int? route)
+    /// <summary>The tuples that apply to the call (route scope preferred over partner scope),
+    /// priority-ordered; empty if none. PrefixMatcher then longest-prefixes over their rateassigns.</summary>
+    public IReadOnlyList<rateplanassignmenttuple> Resolve(int idService, int assignDirection, int? idPartner, int? route)
     {
         if (route is > 0 &&
             _routeIndex.TryGetValue(RouteKey(idService, assignDirection, route.Value), out var rt))
-            return rt[0];
+            return rt;
 
         if (idPartner is > 0 &&
             _partnerIndex.TryGetValue(PartnerKey(idService, assignDirection, idPartner.Value), out var pt))
-            return pt[0];
+            return pt;
 
-        return null;
+        return Array.Empty<rateplanassignmenttuple>();
     }
 
     private static string RouteKey(int idService, int dir, int route) => $"{idService}/{dir}/{route}";
     private static string PartnerKey(int idService, int dir, int idPartner) => $"{idService}/{dir}/{idPartner}";
 
-    private static void Add(Dictionary<string, List<RatePlanAssignmentTuple>> index, string key, RatePlanAssignmentTuple t)
+    private static void Add(Dictionary<string, List<rateplanassignmenttuple>> index, string key, rateplanassignmenttuple t)
     {
-        if (!index.TryGetValue(key, out var list)) index[key] = list = new List<RatePlanAssignmentTuple>();
+        if (!index.TryGetValue(key, out var list)) index[key] = list = new List<rateplanassignmenttuple>();
         list.Add(t);
     }
 
-    private static IReadOnlyDictionary<string, IReadOnlyList<RatePlanAssignmentTuple>> Freeze(
-        Dictionary<string, List<RatePlanAssignmentTuple>> index)
+    private static IReadOnlyDictionary<string, IReadOnlyList<rateplanassignmenttuple>> Freeze(
+        Dictionary<string, List<rateplanassignmenttuple>> index)
     {
-        var frozen = new Dictionary<string, IReadOnlyList<RatePlanAssignmentTuple>>(index.Count);
+        var frozen = new Dictionary<string, IReadOnlyList<rateplanassignmenttuple>>(index.Count);
         foreach (var (key, list) in index)
-            frozen[key] = list.OrderBy(t => t.Priority).ToList();   // lowest priority first
+            frozen[key] = list.OrderBy(t => t.priority).ToList();   // lowest priority first
         return frozen;
     }
 

@@ -25,43 +25,31 @@ internal static class ConfigManagerMapper
     private static DynamicContext ToContext(DynamicContextDto? dto)
     {
         if (dto is null) return DynamicContext.Empty;
-
-        // The today's-rates map is built once and shared: it backs both the raw lookup on
-        // DynamicContext and the longest-prefix RateCache folded into the MediationContext.
-        var todaysRates = dto.RatePlanWiseTodaysRates?.ToDictionary(
-            kv => kv.Key, kv => (IReadOnlyDictionary<string, Rate>)kv.Value)
-            ?? new Dictionary<int, IReadOnlyDictionary<string, Rate>>();
-
         return new DynamicContext
         {
             Partners = dto.Partners ?? new Dictionary<int, Partner>(),
             RatePlans = dto.RatePlans ?? new Dictionary<int, RatePlan>(),
-            RatePlanWiseTodaysRates = todaysRates,
+            RatePlanWiseTodaysRates = dto.RatePlanWiseTodaysRates?.ToDictionary(
+                kv => kv.Key, kv => (IReadOnlyDictionary<string, Rate>)kv.Value)
+                ?? new Dictionary<int, IReadOnlyDictionary<string, Rate>>(),
             RateAssignsCustomer = dto.RateAssignsCustomer ?? [],
             RateAssignsSupplier = dto.RateAssignsSupplier ?? [],
             PartnerIdWisePackageAccounts = dto.PartnerIdWisePackageAccounts?.ToDictionary(
                 kv => kv.Key, kv => (IReadOnlyList<PackageAccount>)kv.Value)
                 ?? new Dictionary<long, IReadOnlyList<PackageAccount>>(),
-            MediationContext = ToMediation(dto.MediationContext, todaysRates),
+            MediationContext = ToMediation(dto.MediationContext),
         };
     }
 
-    private static MediationContext ToMediation(
-        MediationContextDto? dto,
-        IReadOnlyDictionary<int, IReadOnlyDictionary<string, Rate>> todaysRates)
+    private static MediationContext ToMediation(MediationContextDto? dto)
     {
-        // The today-only RateCache is built from the tenant's already-today-scoped rates (rates ride on
-        // DynamicContext, not inside MediationContextDto — so it is built even when the dto is absent),
-        // and stamped with today's date so the day-boundary refresher can detect a rollover.
-        var rateCache = RateCache.Build(todaysRates, DateOnly.FromDateTime(DateTime.Today));
-
-        if (dto is null) return new MediationContext { RateCache = rateCache };
-
+        if (dto is null) return MediationContext.Empty;
         return new MediationContext
         {
             Categories = dto.Categories ?? new Dictionary<int, ServiceCategory>(),
             ServiceGroupRules = dto.ServiceGroupRules ?? [],
-            RateCache = rateCache,
+            // The resolver is built from the tenant's verbatim legacy rateplanassignmenttuples (each
+            // carrying its rateassigns); PrefixMatcher longest-prefixes over them at charge time.
             RatePlanResolver = RatePlanResolver.Build(dto.RatePlanAssignmentTuples ?? []),
         };
     }

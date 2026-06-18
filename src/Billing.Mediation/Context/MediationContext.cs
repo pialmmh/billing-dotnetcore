@@ -8,9 +8,10 @@ namespace Billing.Mediation.Context;
 /// tenant: <c>tenant.Context.MediationContext</c>. Immutable; swapped wholesale on reload.
 ///
 /// Holds the category lookup (the cross-system id namespace), the ordered service-group detection
-/// rules, and the today-only <see cref="RateCache"/> (the rater's prefix→Rate lookup). config-manager
-/// serves <see cref="Categories"/> from the existing EnumServiceCategory table;
-/// <see cref="ServiceGroupRules"/> arrives once its (additive) table is ratified — empty until then.
+/// rules, and the <see cref="RatePlanResolver"/> over this tenant's verbatim legacy
+/// <c>rateplanassignmenttuple</c>s (each carrying its <c>rateassigns</c>). config-manager serves
+/// <see cref="Categories"/> from the existing EnumServiceCategory table; <see cref="ServiceGroupRules"/>
+/// arrives once its (additive) table is ratified — empty until then.
 /// </summary>
 public sealed class MediationContext
 {
@@ -19,13 +20,9 @@ public sealed class MediationContext
 
     public IReadOnlyList<ServiceGroupRule> ServiceGroupRules { get; init; } = [];
 
-    /// <summary>This tenant's today-valid rate lookup, built from the tenant's
-    /// <c>RatePlanWiseTodaysRates</c>. Stamped with the date it was built for so the day-boundary
-    /// refresher can detect a rollover and rebuild (CDC config-events do not fire at midnight).</summary>
-    public RateCache RateCache { get; init; } = RateCache.Empty;
-
-    /// <summary>Resolves which rate plan applies to a call (by service group + direction + partner/route),
-    /// built from this tenant's rate-plan-assignment tuples.</summary>
+    /// <summary>Resolves which rate-plan-assignment tuples apply to a call (by service group + direction +
+    /// partner/route), built from this tenant's legacy <c>rateplanassignmenttuple</c>s. PrefixMatcher then
+    /// longest-prefixes over the resolved tuples' rateassigns.</summary>
     public RatePlanResolver RatePlanResolver { get; init; } = RatePlanResolver.Empty;
 
     /// <summary>An empty context — the safe default before the first successful load.</summary>
