@@ -12,9 +12,9 @@ public class RateCacheTests
         {
             [1] = new Dictionary<string, Rate>
             {
-                ["880"]   = new() { Prefix = "880",   RateValue = 1.0m, Uom = "BDT" },
-                ["8801"]  = new() { Prefix = "8801",  RateValue = 2.0m, Uom = "BDT" },
-                ["88017"] = new() { Prefix = "88017", RateValue = 3.0m, Uom = "BDT" },
+                ["880"]   = new() { Prefix = "880",   RateAmount = 1.0m, IdRatePlan = 1 },
+                ["8801"]  = new() { Prefix = "8801",  RateAmount = 2.0m, IdRatePlan = 1 },
+                ["88017"] = new() { Prefix = "88017", RateAmount = 3.0m, IdRatePlan = 1 },
             },
         },
         new DateOnly(2026, 6, 17));
@@ -23,9 +23,9 @@ public class RateCacheTests
     public void Longest_prefix_wins()
     {
         var cache = Build();
-        Assert.Equal(3.0m, cache.FindRate(1, "8801712345")!.RateValue);  // 88017 (longest)
-        Assert.Equal(2.0m, cache.FindRate(1, "8801812345")!.RateValue);  // 8801, not 88017
-        Assert.Equal(1.0m, cache.FindRate(1, "8809912345")!.RateValue);  // 880
+        Assert.Equal(3.0m, cache.FindRate(1, "8801712345")!.RateAmount);  // 88017 (longest)
+        Assert.Equal(2.0m, cache.FindRate(1, "8801812345")!.RateAmount);  // 8801, not 88017
+        Assert.Equal(1.0m, cache.FindRate(1, "8809912345")!.RateAmount);  // 880
     }
 
     [Fact]

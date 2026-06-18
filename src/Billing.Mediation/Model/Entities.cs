@@ -24,14 +24,28 @@ public sealed record RatePlan
     public IReadOnlyList<int> PartnerIds { get; init; } = [];
 }
 
-/// <summary>One rate row: price per billing span for a (plan, prefix/zone).</summary>
+/// <summary>One rate row (config-manager rateassign / today's-rates). Field names match the
+/// config-manager JSON so it deserializes fully — the A2Z charge math reads rateAmount + the
+/// pulse/surcharge fields (Resolution, MinDurationSec, SurchargeTime, SurchargeAmount).</summary>
 public sealed record Rate
 {
+    public long Id { get; init; }
     public string? Prefix { get; init; }
-    public string? Country { get; init; }
-    public decimal RateValue { get; init; }
-    public string? Uom { get; init; }
-    public int BillingSpanSeconds { get; init; } = 60;
+    public int IdRatePlan { get; init; }
+    public decimal RateAmount { get; init; }
+    public string? CountryCode { get; init; }
+    public int Category { get; init; }
+
+    /// <summary>Pulse — round the billed duration UP to a multiple of this many seconds.</summary>
+    public int Resolution { get; init; }
+    /// <summary>Minimum billable duration in seconds.</summary>
+    public decimal MinDurationSec { get; init; }
+    /// <summary>Connect-charge threshold (seconds); at/after it, SurchargeAmount applies.</summary>
+    public int SurchargeTime { get; init; }
+    /// <summary>Connect/setup charge added once.</summary>
+    public decimal SurchargeAmount { get; init; }
+    /// <summary>1 = rate is inactive.</summary>
+    public int Inactive { get; init; }
 }
 
 /// <summary>Assigns a rate plan to a partner in a direction (customer = charge-in, supplier = pay-out).</summary>
