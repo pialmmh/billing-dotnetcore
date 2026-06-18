@@ -62,6 +62,7 @@ internal static class ConfigManagerMapper
             Categories = dto.Categories ?? new Dictionary<int, ServiceCategory>(),
             ServiceGroupRules = dto.ServiceGroupRules ?? [],
             RateCache = rateCache,
+            RatePlanResolver = RatePlanResolver.Build(dto.RatePlanAssignmentTuples ?? []),
         };
     }
 }

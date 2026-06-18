@@ -24,6 +24,10 @@ public sealed class MediationContext
     /// refresher can detect a rollover and rebuild (CDC config-events do not fire at midnight).</summary>
     public RateCache RateCache { get; init; } = RateCache.Empty;
 
+    /// <summary>Resolves which rate plan applies to a call (by service group + direction + partner/route),
+    /// built from this tenant's rate-plan-assignment tuples.</summary>
+    public RatePlanResolver RatePlanResolver { get; init; } = RatePlanResolver.Empty;
+
     /// <summary>An empty context — the safe default before the first successful load.</summary>
     public static MediationContext Empty { get; } = new();
 }

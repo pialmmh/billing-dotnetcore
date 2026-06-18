@@ -34,4 +34,9 @@ internal sealed class MediationContextDto
 {
     public Dictionary<int, ServiceCategory>? Categories { get; set; }
     public List<ServiceGroupRule>? ServiceGroupRules { get; set; }
+
+    /// <summary>The rate-plan-assignment tuples (idService + direction + partner/route → rate plan)
+    /// config-manager serves from the existing rateplanassignmenttuple/rateassign tables. Absent until
+    /// it does, leaving the resolver empty.</summary>
+    public List<RatePlanAssignmentTuple>? RatePlanAssignmentTuples { get; set; }
 }
