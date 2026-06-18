@@ -18,12 +18,23 @@ public class FinalizeEngineTests
         }),
     };
 
+    // adds a SG10 supplier tuple (out-partner 7 @ 2.0/min) on top of the customer tuple.
+    private static MediationContext MediationWithSupplier() => new()
+    {
+        RatePlanResolver = RatePlanResolver.Build(new[]
+        {
+            TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0, TestData.Ra(1712, 1.0m, idRatePlan: 7)),
+            TestData.Tup(10, (int)AssignmentDirection.Supplier, 7, null, 0, TestData.Ra(1712, 2.0m, idRatePlan: 8)),
+        }),
+    };
+
     private static readonly IReadOnlyDictionary<int, Partner> RetailPartner5 =
         new Dictionary<int, Partner> { [5] = new() { IdPartner = 5, PartnerType = 3 } };
 
-    private static FinalizeFacts Facts(string called = "8801712345678", int billsec = 60, bool answered = true) =>
+    private static FinalizeFacts Facts(string called = "8801712345678", int billsec = 60, bool answered = true,
+        int outPartnerId = 0) =>
         new("telcobright", "8801999000111", called, ServiceType.Voice, SwitchId: 1, "in", "out",
-            AnswerTime: new DateTime(2026, 6, 19), billsec, answered, "uid-1");
+            OutPartnerId: outPartnerId, AnswerTime: new DateTime(2026, 6, 19), billsec, answered, "uid-1");
 
     private static FinalizeTierInput Tier(string dbName, TierMode mode, TierReserved? reserved) =>
         new(dbName, PartnerId: 5, Mediation(), RetailPartner5, mode, reserved);
@@ -92,6 +103,27 @@ public class FinalizeEngineTests
         Assert.False(result.Success);
         Assert.Contains("unknown tenant", result.Error);
         Assert.Empty(result.Settlements);
+    }
+
+    [Fact]
+    public void Full_tier_also_charges_the_supplier_leg()
+    {
+        var tier = new FinalizeTierInput("telcobright", PartnerId: 5, MediationWithSupplier(), RetailPartner5,
+            TierMode.Full, new TierReserved(100, "BDT", 5.0m));
+
+        var result = FinalizeEngine.Default().Finalize(Facts(outPartnerId: 7), new[] { tier });
+
+        var s = result.Settlements["telcobright"];
+        Assert.Equal(1.0m, s.Charged);        // customer leg (60s @ 1.0/min)
+        Assert.Equal(2.0m, s.SupplierCost);   // supplier leg (60s @ 2.0/min, out-partner 7)
+    }
+
+    [Fact]
+    public void Customer_only_tier_has_no_supplier_cost()
+    {
+        var result = FinalizeEngine.Default().Finalize(Facts(outPartnerId: 7),
+            new[] { Tier("res_233", TierMode.CustomerOnly, new TierReserved(100, "BDT", 5.0m)) });
+        Assert.Equal(0m, result.Settlements["res_233"].SupplierCost);
     }
 
     [Fact]

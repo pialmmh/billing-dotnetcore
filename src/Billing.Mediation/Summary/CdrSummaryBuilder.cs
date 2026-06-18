@@ -78,7 +78,13 @@ public static class CdrSummaryBuilder
             s.customercost = chargeable.BilledAmount;
             s.tup_tax1currency = "BDT";
             s.tax1 = chargeable.TaxAmount1 ?? 0;
-            // suppliercost / tax2 / vat / longDecimalAmount1 (anscost) need the supplier+extended legs — deferred.
+            // supplier leg (admin FULL) — populated on the cdr by SfA2Z's supplier direction:
+            s.suppliercost = cdr.OutPartnerCost ?? 0;
+            s.tup_supplierrate = cdr.SupplierRate ?? 0;
+            s.tup_suppliercurrency = "BDT";
+            s.tup_tax2currency = "BDT";
+            s.tax2 = cdr.Tax2 ?? 0;
+            // vat (cdr.ZAmount) / longDecimalAmount1 (cdr.CostAnsIn, anscost) need the ANS extended leg — deferred.
         }
         else if (chargeable.servicegroup == 11)   // SgDomOffnetIn.SetServiceGroupWiseSummaryParams (customer leg)
         {

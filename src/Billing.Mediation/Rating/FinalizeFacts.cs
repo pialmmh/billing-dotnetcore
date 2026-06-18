@@ -14,6 +14,7 @@ public sealed record FinalizeFacts(
     int SwitchId,
     string IncomingRoute,
     string OutgoingRoute,
+    int OutPartnerId,         // the routed out-partner/carrier — the supplier leg (admin FULL) keys off it
     DateTime AnswerTime,      // when the call answered — drives the rate's date-validity match
     int Billsec,              // answered/billable seconds (0 = unanswered → zero charge)
     bool Answered,

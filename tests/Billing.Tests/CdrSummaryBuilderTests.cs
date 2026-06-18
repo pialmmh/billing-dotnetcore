@@ -43,6 +43,21 @@ public class CdrSummaryBuilderTests
     }
 
     [Fact]
+    public void Sg10_picks_up_supplier_leg_fields()
+    {
+        var cdr = Sg10Cdr();
+        cdr.OutPartnerCost = 2.0m;   // set by SfA2Z's supplier leg
+        cdr.SupplierRate = 2.0m;
+        cdr.Tax2 = 0.3m;
+
+        var summary = CdrSummaryBuilder.Build(cdr, Sg10Chargeable(), SummaryBucket.Day);
+
+        Assert.Equal(2.0m, summary.suppliercost);
+        Assert.Equal(2.0m, summary.tup_supplierrate);
+        Assert.Equal(0.3m, summary.tax2);
+    }
+
+    [Fact]
     public void Sg11_builds_day_02()
     {
         var cdr = Sg10Cdr();

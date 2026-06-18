@@ -22,12 +22,13 @@ public sealed record TierSettlement(
     decimal PackageAmount,      // billable minutes for package units (0 for cash)
     decimal InPartnerCost,      // cash cost for BDT (0 for package units)
     decimal Tax,                // family tax (SF10 VAT / SF11 BTRC)
+    decimal SupplierCost,       // out-partner cost from the supplier leg (admin FULL only; 0 otherwise)
     string MatchedPrefix,
     string? Error)
 {
     public static TierSettlement Unrated(string dbName, int partnerId) =>
         new(dbName, partnerId, ServiceGroupId: 0, ServiceFamilyId: 0, Uom: "", Charged: 0, PackageAmount: 0,
-            InPartnerCost: 0, Tax: 0, MatchedPrefix: "",
+            InPartnerCost: 0, Tax: 0, SupplierCost: 0, MatchedPrefix: "",
             Error: "unrated: no service group, rate plan, or matching rate");
 }
 

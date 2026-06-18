@@ -27,6 +27,24 @@ public class ServiceFamilyTests
     }
 
     [Fact]
+    public void Sf1_supplier_leg_charges_out_partner_cost_with_tax_on_in_partner_cost()
+    {
+        // supplier rate 2.0/min; OtherAmount3 = 50 (a PERCENT for the base SfA2Z → /100).
+        var rate = TestData.Ra(prefix: 1712, amount: 2.0m, otherAmount3: 50f);
+        // the customer leg already set InPartnerCost = 1.0 (SfA2Z taxes on InPartnerCost even for supplier).
+        var thisCdr = new cdr { DurationSec = 60m, OutPartnerId = 7, InPartnerCost = 1.0m };
+
+        var ch = new SfA2Z().Charge(rate, thisCdr, serviceGroupId: 10, AssignmentDirection.Supplier, 8);
+
+        Assert.Equal(1, ch.servicefamily);
+        Assert.Equal(2.0m, ch.BilledAmount);        // 60s @ 2.0/min supplier rate
+        Assert.Equal(2.0m, thisCdr.OutPartnerCost);
+        Assert.Equal(2.0m, thisCdr.SupplierRate);
+        Assert.Equal(0.5m, ch.TaxAmount1);          // InPartnerCost(1.0) * 50/100
+        Assert.Equal(0.5m, thisCdr.Tax2);
+    }
+
+    [Fact]
     public void Sf11_charges_ans_rate_minus_iof_plus_btrc()
     {
         // rate 1.0, IOF 0.25 → effective 0.75; ANS = 60*0.75/60 = 0.75; BTRC = 0.75 * 0.5 = 0.375

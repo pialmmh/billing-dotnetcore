@@ -43,20 +43,29 @@ public sealed class FinalizeEngine
     private TierSettlement SettleTier(FinalizeFacts facts, FinalizeTierInput tier)
     {
         var thisCdr = BuildCdr(facts, tier);
-        var chargeable = _basicCharge.Compute(thisCdr, AssignmentDirection.Customer, tier.Mediation, tier.Partners);
-        if (chargeable is null)
+        var customer = _basicCharge.Compute(thisCdr, AssignmentDirection.Customer, tier.Mediation, tier.Partners);
+        if (customer is null)
             return TierSettlement.Unrated(tier.DbName, tier.PartnerId);
+
+        // Admin (FULL) tiers also charge the supplier leg (the cost paid to the out-partner); reseller
+        // tiers are customer-only. The supplier leg reads the InPartnerCost set above, so it runs on the
+        // SAME cdr, after the customer leg. (Null when there's no supplier tuple, e.g. SG11.)
+        var supplier = tier.Mode == TierMode.Full
+            ? _basicCharge.Compute(thisCdr, AssignmentDirection.Supplier, tier.Mediation, tier.Partners)
+            : null;
+        var supplierCost = supplier?.BilledAmount ?? 0m;
 
         // The reserved uom decides how the charge lands: package units (consumed minutes) vs cash (BDT).
         var uom = tier.Reserved?.Uom ?? "BDT";
         var isCash = string.Equals(uom, "BDT", StringComparison.OrdinalIgnoreCase);
-        var billedAmount = chargeable.BilledAmount;
-        var packageAmount = isCash ? 0m : decimal.Round(chargeable.Quantity / 60m, 8);
+        var billedAmount = customer.BilledAmount;
+        var packageAmount = isCash ? 0m : decimal.Round(customer.Quantity / 60m, 8);
         var inPartnerCost = isCash ? billedAmount : 0m;
         var charged = isCash ? billedAmount : packageAmount;
 
-        return new TierSettlement(tier.DbName, tier.PartnerId, chargeable.servicegroup, chargeable.servicefamily,
-            uom, charged, packageAmount, inPartnerCost, chargeable.TaxAmount1 ?? 0m, chargeable.Prefix, Error: null);
+        return new TierSettlement(tier.DbName, tier.PartnerId, customer.servicegroup, customer.servicefamily,
+            uom, charged, packageAmount, inPartnerCost, customer.TaxAmount1 ?? 0m, supplierCost,
+            customer.Prefix, Error: null);
     }
 
     /// <summary>Build the per-tier cdr from the call facts (dotnet owns the cdr shape, per the contract).
@@ -65,6 +74,7 @@ public sealed class FinalizeEngine
     private static cdr BuildCdr(FinalizeFacts facts, FinalizeTierInput tier) => new()
     {
         InPartnerId = tier.PartnerId,
+        OutPartnerId = facts.OutPartnerId,
         OriginatingCallingNumber = facts.CallingNumber,
         TerminatingCalledNumber = facts.CalledNumber,
         DurationSec = facts.Billsec,

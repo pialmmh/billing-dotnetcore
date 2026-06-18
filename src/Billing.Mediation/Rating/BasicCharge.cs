@@ -18,11 +18,14 @@ namespace Billing.Mediation.Rating;
 /// </summary>
 public sealed class BasicCharge
 {
-    private static readonly IReadOnlyDictionary<int, IServiceFamily> FamilyByServiceGroup =
-        new Dictionary<int, IServiceFamily>
+    // The family for each (service group, direction). SG10 has a customer leg (SF10 A2Z+VAT) and a
+    // supplier leg (SF1 base A2Z); SG11 is customer-only (reseller/customer-only spec).
+    private static readonly IReadOnlyDictionary<(int ServiceGroup, AssignmentDirection Direction), IServiceFamily>
+        FamilyBySgAndDirection = new Dictionary<(int, AssignmentDirection), IServiceFamily>
         {
-            [10] = new SfA2ZWithVatTax(),     // SG10 customer family
-            [11] = new SfDomOffNetInAns(),    // SG11 customer family
+            [(10, AssignmentDirection.Customer)] = new SfA2ZWithVatTax(),
+            [(10, AssignmentDirection.Supplier)] = new SfA2Z(),
+            [(11, AssignmentDirection.Customer)] = new SfDomOffNetInAns(),
         };
 
     private readonly ServiceGroupDetection _detection;
@@ -38,7 +41,7 @@ public sealed class BasicCharge
     {
         var match = _detection.Detect(cdr, partners);
         if (match is null) return null;
-        if (!FamilyByServiceGroup.TryGetValue(match.Value.ServiceGroupId, out var family)) return null;
+        if (!FamilyBySgAndDirection.TryGetValue((match.Value.ServiceGroupId, direction), out var family)) return null;
 
         // Customer leg keys off the in-partner, supplier leg off the out-partner (legacy A2ZRater).
         var idPartner = direction == AssignmentDirection.Supplier ? cdr.OutPartnerId : cdr.InPartnerId;
