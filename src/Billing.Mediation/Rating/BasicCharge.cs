@@ -1,27 +1,30 @@
 using Billing.Mediation.Context;
 using Billing.Mediation.Model;
+using Billing.Mediation.ServiceFamilies;
 using Billing.Mediation.ServiceGroups;
 using MediationModel;
 
 namespace Billing.Mediation.Rating;
 
-/// <summary>The basic per-leg charge for one call: the detected service group, the chosen rate plan and
-/// matched prefix, and the pulse/surcharge-adjusted duration + amount.</summary>
-public readonly record struct BasicChargeResult(
-    int ServiceGroupId, int IdRatePlan, string MatchedPrefix, decimal BilledDurationSec, decimal Amount);
-
 /// <summary>
-/// Wires the basic charge end to end for a single direction (the architect's "basic charge first" slice):
-/// detect the service group → resolve the rate-plan tuples by (idService, direction, partner/route) →
-/// <see cref="PrefixMatcher"/> longest-prefixes the normalized number over the tuples' rateassigns →
-/// <see cref="A2ZRater"/> runs the duration+amount math.
+/// The per-leg customer charge end to end: detect the service group → resolve the rate-plan tuples by
+/// (idService, direction, partner/route) → <see cref="PrefixMatcher"/> longest-prefixes over the tuples'
+/// rateassigns → the SG's <see cref="IServiceFamily"/> computes the charge + tax and returns the
+/// <see cref="acc_chargeable"/> (SG10→SfA2ZWithVatTax, SG11→SfDomOffNetInAns).
 ///
-/// One leg only (customer or supplier). Route-scoped resolution is deferred (route id needs the
-/// switch/route map we do not load yet), so this passes the partner scope; <c>billingSpanSec</c> defaults
-/// to 60 (per-minute) until the rate plan supplies it.
+/// One leg only. Route-scoped resolution is deferred (passes the partner scope). The accounting/posting
+/// half of the legacy families (GL account, billing rule, acc_transaction) is deferred to the mem-ledger
+/// slice — the chargeable here carries the rating fields the summary reads.
 /// </summary>
 public sealed class BasicCharge
 {
+    private static readonly IReadOnlyDictionary<int, IServiceFamily> FamilyByServiceGroup =
+        new Dictionary<int, IServiceFamily>
+        {
+            [10] = new SfA2ZWithVatTax(),     // SG10 customer family
+            [11] = new SfDomOffNetInAns(),    // SG11 customer family
+        };
+
     private readonly ServiceGroupDetection _detection;
 
     public BasicCharge(ServiceGroupDetection detection) => _detection = detection;
@@ -29,12 +32,13 @@ public sealed class BasicCharge
     /// <summary>The SG10+SG11 detection pair — the ready instance for tests and the rating flow.</summary>
     public static BasicCharge Default() => new(ServiceGroupDetection.Default());
 
-    public BasicChargeResult? Compute(
+    public acc_chargeable? Compute(
         cdr cdr, AssignmentDirection direction, MediationContext mediation,
-        IReadOnlyDictionary<int, Partner> partners, int billingSpanSec = 60)
+        IReadOnlyDictionary<int, Partner> partners, int maxDecimalPrecision = 8)
     {
         var match = _detection.Detect(cdr, partners);
         if (match is null) return null;
+        if (!FamilyByServiceGroup.TryGetValue(match.Value.ServiceGroupId, out var family)) return null;
 
         // Customer leg keys off the in-partner, supplier leg off the out-partner (legacy A2ZRater).
         var idPartner = direction == AssignmentDirection.Supplier ? cdr.OutPartnerId : cdr.InPartnerId;
@@ -51,9 +55,6 @@ public sealed class BasicCharge
             .MatchPrefix(match.Value.NormalizedNumber);
         if (rate is null) return null;
 
-        var charge = A2ZRater.Rate(rate, cdr.DurationSec, billingSpanSec);
-        return new BasicChargeResult(
-            match.Value.ServiceGroupId, (int)(rate.idrateplan ?? 0), rate.Prefix.ToString(),
-            charge.BilledDurationSec, charge.Amount);
+        return family.Charge(rate, cdr, match.Value.ServiceGroupId, direction, maxDecimalPrecision);
     }
 }

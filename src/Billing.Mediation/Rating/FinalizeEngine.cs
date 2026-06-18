@@ -43,21 +43,20 @@ public sealed class FinalizeEngine
     private TierSettlement SettleTier(FinalizeFacts facts, FinalizeTierInput tier)
     {
         var thisCdr = BuildCdr(facts, tier);
-        var charge = _basicCharge.Compute(thisCdr, AssignmentDirection.Customer, tier.Mediation, tier.Partners);
-        if (charge is null)
+        var chargeable = _basicCharge.Compute(thisCdr, AssignmentDirection.Customer, tier.Mediation, tier.Partners);
+        if (chargeable is null)
             return TierSettlement.Unrated(tier.DbName, tier.PartnerId);
-
-        var c = charge.Value;
 
         // The reserved uom decides how the charge lands: package units (consumed minutes) vs cash (BDT).
         var uom = tier.Reserved?.Uom ?? "BDT";
         var isCash = string.Equals(uom, "BDT", StringComparison.OrdinalIgnoreCase);
-        var packageAmount = isCash ? 0m : decimal.Round(c.BilledDurationSec / 60m, 8);
-        var inPartnerCost = isCash ? c.Amount : 0m;
-        var charged = isCash ? c.Amount : packageAmount;
+        var billedAmount = chargeable.BilledAmount;
+        var packageAmount = isCash ? 0m : decimal.Round(chargeable.Quantity / 60m, 8);
+        var inPartnerCost = isCash ? billedAmount : 0m;
+        var charged = isCash ? billedAmount : packageAmount;
 
-        return new TierSettlement(tier.DbName, tier.PartnerId, c.ServiceGroupId, uom,
-            charged, packageAmount, inPartnerCost, c.MatchedPrefix, Error: null);
+        return new TierSettlement(tier.DbName, tier.PartnerId, chargeable.servicegroup, chargeable.servicefamily,
+            uom, charged, packageAmount, inPartnerCost, chargeable.TaxAmount1 ?? 0m, chargeable.Prefix, Error: null);
     }
 
     /// <summary>Build the per-tier cdr from the call facts (dotnet owns the cdr shape, per the contract).

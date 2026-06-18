@@ -8,7 +8,8 @@ internal static class TestData
 {
     public static rateassign Ra(int prefix, decimal amount, int resolution = 0, int surchargeTime = 0,
         float minDurationSec = 0, long idRatePlan = 7, sbyte category = 1, sbyte subCategory = 1,
-        DateTime? startdate = null, DateTime? enddate = null, int inactive = 0) => new()
+        DateTime? startdate = null, DateTime? enddate = null, int inactive = 0,
+        float otherAmount1 = 0, float otherAmount3 = 0) => new()
     {
         Prefix = prefix,
         rateamount = amount,
@@ -21,6 +22,8 @@ internal static class TestData
         startdate = startdate ?? DateTime.MinValue,
         enddate = enddate,
         Inactive = inactive,
+        OtherAmount1 = otherAmount1,   // SF11 IOF / additional charge
+        OtherAmount3 = otherAmount3,   // SF10 VAT fraction / SF11 BTRC fraction
     };
 
     public static rateplanassignmenttuple Tup(int idService, int assignDirection, int? idPartner, int? route,

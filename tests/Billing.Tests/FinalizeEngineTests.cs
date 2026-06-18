@@ -37,6 +37,7 @@ public class FinalizeEngineTests
         Assert.True(result.Success);
         var s = result.Settlements["telcobright"];
         Assert.Equal(10, s.ServiceGroupId);
+        Assert.Equal(10, s.ServiceFamilyId);
         Assert.Equal(1.0m, s.Charged);
         Assert.Equal(1.0m, s.InPartnerCost);
         Assert.Equal(0m, s.PackageAmount);

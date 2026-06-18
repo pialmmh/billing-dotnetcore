@@ -9,22 +9,25 @@ public sealed record TierReserved(
 
 /// <summary>One tier's final settlement. routesphere applies <see cref="Charged"/> to mem-ledger
 /// (debit final, refund the rest of the hold). For a package uom the charge is in units
-/// (<see cref="PackageAmount"/>); for cash (BDT) it is money (<see cref="InPartnerCost"/>). A non-null
-/// <see cref="Error"/> means this tier could not be settled.</summary>
+/// (<see cref="PackageAmount"/>); for cash (BDT) it is money (<see cref="InPartnerCost"/>).
+/// <see cref="Tax"/> is the family's tax (SF10 VAT / SF11 BTRC). A non-null <see cref="Error"/> means
+/// this tier could not be settled.</summary>
 public sealed record TierSettlement(
     string DbName,
     int PartnerId,
     int ServiceGroupId,
+    int ServiceFamilyId,
     string Uom,
     decimal Charged,
     decimal PackageAmount,      // billable minutes for package units (0 for cash)
     decimal InPartnerCost,      // cash cost for BDT (0 for package units)
+    decimal Tax,                // family tax (SF10 VAT / SF11 BTRC)
     string MatchedPrefix,
     string? Error)
 {
     public static TierSettlement Unrated(string dbName, int partnerId) =>
-        new(dbName, partnerId, ServiceGroupId: 0, Uom: "", Charged: 0, PackageAmount: 0,
-            InPartnerCost: 0, MatchedPrefix: "",
+        new(dbName, partnerId, ServiceGroupId: 0, ServiceFamilyId: 0, Uom: "", Charged: 0, PackageAmount: 0,
+            InPartnerCost: 0, Tax: 0, MatchedPrefix: "",
             Error: "unrated: no service group, rate plan, or matching rate");
 }
 
