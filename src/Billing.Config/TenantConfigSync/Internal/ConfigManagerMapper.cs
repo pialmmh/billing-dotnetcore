@@ -2,6 +2,7 @@ using Billing.Config.TenantConfigSync.Internal.Dto;
 using Billing.Config.TenantConfigSync.Model;
 using Billing.Mediation.Context;
 using Billing.Mediation.Model;
+using Billing.Mediation.Rating;
 
 namespace Billing.Config.TenantConfigSync.Internal;
 
@@ -24,29 +25,43 @@ internal static class ConfigManagerMapper
     private static DynamicContext ToContext(DynamicContextDto? dto)
     {
         if (dto is null) return DynamicContext.Empty;
+
+        // The today's-rates map is built once and shared: it backs both the raw lookup on
+        // DynamicContext and the longest-prefix RateCache folded into the MediationContext.
+        var todaysRates = dto.RatePlanWiseTodaysRates?.ToDictionary(
+            kv => kv.Key, kv => (IReadOnlyDictionary<string, Rate>)kv.Value)
+            ?? new Dictionary<int, IReadOnlyDictionary<string, Rate>>();
+
         return new DynamicContext
         {
             Partners = dto.Partners ?? new Dictionary<int, Partner>(),
             RatePlans = dto.RatePlans ?? new Dictionary<int, RatePlan>(),
-            RatePlanWiseTodaysRates = dto.RatePlanWiseTodaysRates?.ToDictionary(
-                kv => kv.Key, kv => (IReadOnlyDictionary<string, Rate>)kv.Value)
-                ?? new Dictionary<int, IReadOnlyDictionary<string, Rate>>(),
+            RatePlanWiseTodaysRates = todaysRates,
             RateAssignsCustomer = dto.RateAssignsCustomer ?? [],
             RateAssignsSupplier = dto.RateAssignsSupplier ?? [],
             PartnerIdWisePackageAccounts = dto.PartnerIdWisePackageAccounts?.ToDictionary(
                 kv => kv.Key, kv => (IReadOnlyList<PackageAccount>)kv.Value)
                 ?? new Dictionary<long, IReadOnlyList<PackageAccount>>(),
-            MediationContext = ToMediation(dto.MediationContext),
+            MediationContext = ToMediation(dto.MediationContext, todaysRates),
         };
     }
 
-    private static MediationContext ToMediation(MediationContextDto? dto)
+    private static MediationContext ToMediation(
+        MediationContextDto? dto,
+        IReadOnlyDictionary<int, IReadOnlyDictionary<string, Rate>> todaysRates)
     {
-        if (dto is null) return MediationContext.Empty;
+        // The today-only RateCache is built from the tenant's already-today-scoped rates (rates ride on
+        // DynamicContext, not inside MediationContextDto — so it is built even when the dto is absent),
+        // and stamped with today's date so the day-boundary refresher can detect a rollover.
+        var rateCache = RateCache.Build(todaysRates, DateOnly.FromDateTime(DateTime.Today));
+
+        if (dto is null) return new MediationContext { RateCache = rateCache };
+
         return new MediationContext
         {
             Categories = dto.Categories ?? new Dictionary<int, ServiceCategory>(),
             ServiceGroupRules = dto.ServiceGroupRules ?? [],
+            RateCache = rateCache,
         };
     }
 }
