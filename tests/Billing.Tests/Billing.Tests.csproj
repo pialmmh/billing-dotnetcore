@@ -25,6 +25,11 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Billing.Mediation\Billing.Mediation.csproj" />
     <ProjectReference Include="..\..\src\Billing.Config\Billing.Config.csproj" />
+    <ProjectReference Include="..\..\src\Billing.Data\Billing.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MySqlConnector" Version="2.3.7" />
   </ItemGroup>
 
 </Project>
