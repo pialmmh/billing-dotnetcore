@@ -64,5 +64,8 @@ namespace MediationModel
         public string Comment1 { get; set; }
         public string Comment2 { get; set; }
         public string BillingParams { get; set; }
+        // The legacy EF nav rateplanassignmenttuple's underlying FK column — the tuple this rate belongs
+        // to (used by the RateCache loader to group rates per tuple).
+        public Nullable<int> idrateplanassignmenttuple { get; set; }
     }
 }
