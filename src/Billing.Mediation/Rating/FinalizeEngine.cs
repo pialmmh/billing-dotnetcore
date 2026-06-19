@@ -1,18 +1,17 @@
 using Billing.Mediation.Model;
+using Billing.Mediation.Summary;
 using MediationModel;
 
 namespace Billing.Mediation.Rating;
 
 /// <summary>
-/// The post-call charge across the call's tiers — the compute body of <c>FinalizeAndSummarize</c>, minus
-/// the gRPC mapping, the chain resolution (the caller hands the chain in), and persistence (the
-/// single-connection cdr/summary write is a separate, later seam). It mirrors <see cref="MaxRateEngine"/>:
-/// iterate the per-tier inputs, settle each, return the map keyed by dbName.
-///
-/// Each tier currently settles the CUSTOMER leg via <see cref="BasicCharge"/> (detect SG → resolve rate
-/// plan tuples → PrefixMatcher → A2ZRater). The <see cref="TierMode.Full"/> admin extras (supplier leg + Sf
-/// families + extended AnsCost/BTRC/VAT legs) and the cdr/summary writes are the next slices — so a Full
-/// tier currently yields the same customer-leg number as a CustomerOnly tier.
+/// The post-call charge + summary across the call's tiers — the compute body of <c>FinalizeAndSummarize</c>.
+/// Mirrors <see cref="MaxRateEngine"/>: iterate the per-tier inputs, settle each, return the map keyed by
+/// dbName. Each tier settles the customer leg (+ the supplier leg for admin <see cref="TierMode.Full"/>)
+/// via <see cref="BasicCharge"/>, then — when a summary-store factory is supplied — builds, merges and
+/// writes that tier's <c>sum_voice_*</c> via <see cref="CdrSummaryContext"/> (load existing → merge this
+/// call → write) on the tier's store. With no factory it stays PURE COMPUTE (no DB), which the unit tests
+/// use; the gRPC handler passes a store factory to persist.
 /// </summary>
 public sealed class FinalizeEngine
 {
@@ -22,7 +21,8 @@ public sealed class FinalizeEngine
 
     public static FinalizeEngine Default() => new(BasicCharge.Default());
 
-    public FinalizeResult Finalize(FinalizeFacts facts, IReadOnlyList<FinalizeTierInput> chain)
+    public FinalizeResult Finalize(FinalizeFacts facts, IReadOnlyList<FinalizeTierInput> chain,
+        Func<string, ISummaryStore>? summaryStoreFor = null, IAutoIncrementManager? ids = null)
     {
         if (chain.Count == 0)
             return FinalizeResult.Fail($"unknown tenant '{facts.Tenant}'");
@@ -31,16 +31,22 @@ public sealed class FinalizeEngine
         decimal total = 0;
         foreach (var tier in chain)
         {
-            var settlement = SettleTier(facts, tier);
+            var summaryContext = summaryStoreFor is null
+                ? null
+                : new CdrSummaryContext(summaryStoreFor(tier.DbName), ids ?? new CountingAutoIncrementManager());
+
+            var settlement = SettleTier(facts, tier, summaryContext);
             settlements[tier.DbName] = settlement;
             if (settlement.Error is null) total += settlement.Charged;
+
+            summaryContext?.WriteAllChanges();   // single-connection write into this tier's schema
         }
 
         var failing = settlements.Values.FirstOrDefault(s => s.Error is not null);
         return new FinalizeResult(failing is null, failing?.Error ?? "", settlements, total);
     }
 
-    private TierSettlement SettleTier(FinalizeFacts facts, FinalizeTierInput tier)
+    private TierSettlement SettleTier(FinalizeFacts facts, FinalizeTierInput tier, CdrSummaryContext? summaryContext)
     {
         var thisCdr = BuildCdr(facts, tier);
         var customer = _basicCharge.Compute(thisCdr, AssignmentDirection.Customer, tier.Mediation, tier.Partners);
@@ -55,6 +61,14 @@ public sealed class FinalizeEngine
             : null;
         var supplierCost = supplier?.BilledAmount ?? 0m;
 
+        // Build + merge this call's summary onto the loaded rows (the supplier leg above already wrote the
+        // cdr's supplier fields the SG10 summary reads). The caller writes the cache afterward.
+        if (summaryContext is not null)
+        {
+            summaryContext.PopulatePrevSummary(new[] { customer.servicegroup }, thisCdr.StartTime.Date, HourOf(thisCdr.StartTime));
+            summaryContext.AddCall(thisCdr, customer);
+        }
+
         // The reserved uom decides how the charge lands: package units (consumed minutes) vs cash (BDT).
         var uom = tier.Reserved?.Uom ?? "BDT";
         var isCash = string.Equals(uom, "BDT", StringComparison.OrdinalIgnoreCase);
@@ -67,6 +81,8 @@ public sealed class FinalizeEngine
             uom, charged, packageAmount, inPartnerCost, customer.TaxAmount1 ?? 0m, supplierCost,
             customer.Prefix, Error: null);
     }
+
+    private static DateTime HourOf(DateTime t) => new(t.Year, t.Month, t.Day, t.Hour, 0, 0);
 
     /// <summary>Build the per-tier cdr from the call facts (dotnet owns the cdr shape, per the contract).
     /// Both numbers are set; the SG detector picks the terminating (out) or originating (in) one. The

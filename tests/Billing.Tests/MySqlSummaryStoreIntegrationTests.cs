@@ -1,4 +1,7 @@
 using Billing.Data;
+using Billing.Mediation.Context;
+using Billing.Mediation.Model;
+using Billing.Mediation.Rating;
 using Billing.Mediation.Summary;
 using MediationModel;
 using MySqlConnector;
@@ -71,6 +74,45 @@ public class MySqlSummaryStoreIntegrationTests
         Assert.Equal(1L, Convert.ToInt64(Scalar(conn, "select count(*) from sum_voice_day_03")));   // still one row
         Assert.Equal(2L, Convert.ToInt64(Scalar(conn, "select totalcalls from sum_voice_day_03")));  // incremented
         Assert.Equal(2.0m, Convert.ToDecimal(Scalar(conn, "select customercost from sum_voice_day_03"))); // appended
+    }
+
+    [Fact]
+    public void FinalizeEngine_charges_and_writes_summary_end_to_end()
+    {
+        using var conn = TryOpen();
+        if (conn is null) return;   // local mysql not reachable -> skip
+        CreateSchema(conn);
+
+        // mediation: SG10 customer tuple for partner 5 (1.0/min for prefix 1712)
+        var mediation = new MediationContext
+        {
+            RatePlanResolver = RatePlanResolver.Build(new[]
+            {
+                TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0, TestData.Ra(1712, 1.0m, idRatePlan: 7)),
+            }),
+        };
+        var partners = new Dictionary<int, Partner> { [5] = new() { IdPartner = 5, PartnerType = 3 } };
+        var facts = new FinalizeFacts("admin", "8801999000111", "8801712345678", ServiceType.Voice,
+            SwitchId: 1, "in", "out", OutPartnerId: 0, AnswerTime: new DateTime(2026, 6, 19, 14, 30, 0),
+            Billsec: 60, Answered: true, "uid-1");
+        var tier = new FinalizeTierInput("billing_summary_test", PartnerId: 5, mediation, partners,
+            TierMode.Full, new TierReserved(100, "BDT", 5.0m));
+        Func<string, ISummaryStore> storeFor = _ => new MySqlSummaryStore(conn);
+
+        var engine = FinalizeEngine.Default();
+
+        // first call: detect SG10 -> charge -> build summary -> INSERT
+        var r1 = engine.Finalize(facts, new[] { tier }, storeFor, new CountingAutoIncrementManager(1));
+        Assert.True(r1.Success);
+        Assert.Equal(1.0m, r1.Settlements["billing_summary_test"].Charged);
+        Assert.Equal(1L, Convert.ToInt64(Scalar(conn, "select totalcalls from sum_voice_day_03")));
+        Assert.Equal(1.0m, Convert.ToDecimal(Scalar(conn, "select customercost from sum_voice_day_03")));
+
+        // second call (same facts): load existing -> increment -> UPDATE
+        engine.Finalize(facts, new[] { tier }, storeFor, new CountingAutoIncrementManager(100));
+        Assert.Equal(1L, Convert.ToInt64(Scalar(conn, "select count(*) from sum_voice_day_03")));
+        Assert.Equal(2L, Convert.ToInt64(Scalar(conn, "select totalcalls from sum_voice_day_03")));
+        Assert.Equal(2.0m, Convert.ToDecimal(Scalar(conn, "select customercost from sum_voice_day_03")));
     }
 
     private static void CreateSchema(MySqlConnection conn)
