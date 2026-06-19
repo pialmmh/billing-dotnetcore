@@ -6,6 +6,8 @@
 // LibraryExtensions dependency.
 #nullable disable
 using System;
+using System.Text;
+using LibraryExtensions;
 
 namespace MediationModel
 {
@@ -13,7 +15,7 @@ namespace MediationModel
         ValueTuple<string, string, string, string, string, string, string,
             ValueTuple<string, string, string, string, string, string>>>;
 
-    public abstract class AbstractCdrSummary : ISummary<AbstractCdrSummary, CdrSummaryTuple>
+    public abstract class AbstractCdrSummary : ISummary<AbstractCdrSummary, CdrSummaryTuple>, ICacheble<AbstractCdrSummary>
     {
         protected AbstractCdrSummary() { } // don't remove, required at runtime by some code
         public abstract long id { get; set; }
@@ -211,6 +213,115 @@ namespace MediationModel
             newSummary.decimalAmount2 = this.decimalAmount2;
             newSummary.decimalAmount3 = this.decimalAmount3;
             return newSummary;
+        }
+
+        // ---- ICacheble<AbstractCdrSummary>: the per-row SQL the cache writes, ported VERBATIM from the
+        //      legacy EntityExtensions writers. "AbstractCdrSummary" is the table-name placeholder that
+        //      CdrSummaryContext replaces with the concrete sum_voice_* table name. ----
+
+        /// <summary>Column list for the INSERT header, in GetExtInsertValues order.</summary>
+        public const string ExtInsertColumns =
+            "id,tup_switchid,tup_inpartnerid,tup_outpartnerid,tup_incomingroute,tup_outgoingroute," +
+            "tup_customerrate,tup_supplierrate,tup_incomingip,tup_outgoingip,tup_countryorareacode," +
+            "tup_matchedprefixcustomer,tup_matchedprefixsupplier,tup_sourceId,tup_destinationId," +
+            "tup_customercurrency,tup_suppliercurrency,tup_tax1currency,tup_tax2currency,tup_vatcurrency," +
+            "tup_starttime,totalcalls,connectedcalls,connectedcallsCC,successfulcalls,actualduration," +
+            "roundedduration,duration1,duration2,duration3,PDD,customercost,suppliercost,tax1,tax2,vat," +
+            "intAmount1,intAmount2,longAmount1,longAmount2,longDecimalAmount1,longDecimalAmount2," +
+            "intAmount3,longAmount3,longDecimalAmount3,decimalAmount1,decimalAmount2,decimalAmount3";
+
+        public StringBuilder GetExtInsertValues()
+        {
+            return new StringBuilder("(")
+                .Append(this.id.ToMySqlField()).Append(",")
+                .Append(this.tup_switchid.ToMySqlField()).Append(",")
+                .Append(this.tup_inpartnerid.ToMySqlField()).Append(",")
+                .Append(this.tup_outpartnerid.ToMySqlField()).Append(",")
+                .Append(this.tup_incomingroute.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_outgoingroute.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_customerrate.ToMySqlField()).Append(",")
+                .Append(this.tup_supplierrate.ToMySqlField()).Append(",")
+                .Append(this.tup_incomingip.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_outgoingip.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_countryorareacode.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_matchedprefixcustomer.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_matchedprefixsupplier.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_sourceId.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_destinationId.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_customercurrency.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_suppliercurrency.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_tax1currency.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_tax2currency.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_vatcurrency.ToNotNullSqlField()).Append(",")
+                .Append(this.tup_starttime.ToMySqlField()).Append(",")
+                .Append(this.totalcalls.ToMySqlField()).Append(",")
+                .Append(this.connectedcalls.ToMySqlField()).Append(",")
+                .Append(this.connectedcallsCC.ToMySqlField()).Append(",")
+                .Append(this.successfulcalls.ToMySqlField()).Append(",")
+                .Append(this.actualduration.ToMySqlField()).Append(",")
+                .Append(this.roundedduration.ToMySqlField()).Append(",")
+                .Append(this.duration1.ToMySqlField()).Append(",")
+                .Append(this.duration2.ToMySqlField()).Append(",")
+                .Append(this.duration3.ToMySqlField()).Append(",")
+                .Append(this.PDD.ToMySqlField()).Append(",")
+                .Append(this.customercost.ToMySqlField()).Append(",")
+                .Append(this.suppliercost.ToMySqlField()).Append(",")
+                .Append(this.tax1.ToMySqlField()).Append(",")
+                .Append(this.tax2.ToMySqlField()).Append(",")
+                .Append(this.vat.ToMySqlField()).Append(",")
+                .Append(this.intAmount1.ToMySqlField()).Append(",")
+                .Append(this.intAmount2.ToMySqlField()).Append(",")
+                .Append(this.longAmount1.ToMySqlField()).Append(",")
+                .Append(this.longAmount2.ToMySqlField()).Append(",")
+                .Append(this.longDecimalAmount1.ToMySqlField()).Append(",")
+                .Append(this.longDecimalAmount2.ToMySqlField()).Append(",")
+                .Append(this.intAmount3.ToMySqlField()).Append(",")
+                .Append(this.longAmount3.ToMySqlField()).Append(",")
+                .Append(this.longDecimalAmount3.ToMySqlField()).Append(",")
+                .Append(this.decimalAmount1.ToMySqlField()).Append(",")
+                .Append(this.decimalAmount2.ToMySqlField()).Append(",")
+                .Append(this.decimalAmount3.ToMySqlField()).Append(")");
+        }
+
+        public StringBuilder GetUpdateCommand(Func<AbstractCdrSummary, string> whereClauseMethod)
+        {
+            return new StringBuilder($@"update AbstractCdrSummary set
+                totalcalls={this.totalcalls.ToMySqlField() + " "},
+                connectedcalls={this.connectedcalls.ToMySqlField() + " "},
+                connectedcallsCC={this.connectedcallsCC.ToMySqlField() + " "},
+                successfulcalls={this.successfulcalls.ToMySqlField() + " "},
+                actualduration={this.actualduration.ToMySqlField() + " "},
+                roundedduration={this.roundedduration.ToMySqlField() + " "},
+                duration1={this.duration1.ToMySqlField() + " "},
+                duration2={this.duration2.ToMySqlField() + " "},
+                duration3={this.duration3.ToMySqlField() + " "},
+                PDD={this.PDD.ToMySqlField() + " "},
+                customercost={this.customercost.ToMySqlField() + " "},
+                suppliercost={this.suppliercost.ToMySqlField() + " "},
+                tax1={this.tax1.ToMySqlField() + " "},
+                tax2={this.tax2.ToMySqlField() + " "},
+                vat={this.vat.ToMySqlField() + " "},
+                intAmount1={this.intAmount1.ToMySqlField() + " "},
+                intAmount2={this.intAmount2.ToMySqlField() + " "},
+                longAmount1={this.longAmount1.ToMySqlField() + " "},
+                longAmount2={this.longAmount2.ToMySqlField() + " "},
+                longDecimalAmount1={this.longDecimalAmount1.ToMySqlField() + " "},
+                longDecimalAmount2={this.longDecimalAmount2.ToMySqlField() + " "},
+                intAmount3={this.intAmount3.ToMySqlField() + " "},
+                longAmount3={this.longAmount3.ToMySqlField() + " "},
+                longDecimalAmount3={this.longDecimalAmount3.ToMySqlField() + " "},
+                decimalAmount1={this.decimalAmount1.ToMySqlField() + " "},
+                decimalAmount2={this.decimalAmount2.ToMySqlField() + " "},
+                decimalAmount3={this.decimalAmount3.ToMySqlField() + " "}
+                {whereClauseMethod.Invoke(this)}
+                ");
+        }
+
+        public StringBuilder GetDeleteCommand(Func<AbstractCdrSummary, string> whereClauseMethod)
+        {
+            return new StringBuilder($@"delete from AbstractCdrSummary
+                {whereClauseMethod.Invoke(this)}
+                ");
         }
     }
 }
