@@ -50,6 +50,7 @@ internal static class ConfigManagerMapper
         return MediationContext.ForRating(
             dto.RatePlanAssignmentTuples ?? [],
             dto.Categories,
-            dto.ServiceGroupRules);
+            dto.ServiceGroupRules,
+            dto.ServiceGroupConfigurations);   // null → the built-in default SG configs
     }
 }

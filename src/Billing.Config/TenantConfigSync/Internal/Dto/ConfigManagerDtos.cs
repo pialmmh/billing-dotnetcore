@@ -41,4 +41,8 @@ internal sealed class MediationContextDto
     /// legacy-shaped JSON from the existing rateplanassignmenttuple/rateassign tables. Absent until it
     /// does, leaving the resolver empty.</summary>
     public List<rateplanassignmenttuple>? RatePlanAssignmentTuples { get; set; }
+
+    /// <summary>Per-service-group rating configuration (the ordered rules each detected SG runs). Absent
+    /// until config-manager serves it, in which case the built-in defaults apply.</summary>
+    public Dictionary<int, ServiceGroupConfiguration>? ServiceGroupConfigurations { get; set; }
 }

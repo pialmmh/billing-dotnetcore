@@ -22,6 +22,12 @@ public sealed class MediationContext
 
     public IReadOnlyList<ServiceGroupRule> ServiceGroupRules { get; init; } = [];
 
+    /// <summary>Per-service-group rating configuration (the legacy <c>ServiceGroupConfigurations</c>): the
+    /// ordered <see cref="RatingRule"/>s the rater runs for a detected SG. Defaults to the built-in set
+    /// (<see cref="ServiceGroupConfiguration.Defaults"/>) until config-manager serves them.</summary>
+    public IReadOnlyDictionary<int, ServiceGroupConfiguration> ServiceGroupConfigurations { get; init; }
+        = ServiceGroupConfiguration.Defaults;
+
     /// <summary>Resolves which rate-plan-assignment tuples apply to a call (by service group + direction +
     /// partner/route), built from this tenant's legacy <c>rateplanassignmenttuple</c>s. The resolved tuples
     /// then become <c>TupleByPeriod</c> keys into the <see cref="RateCache"/>.</summary>
@@ -39,10 +45,12 @@ public sealed class MediationContext
     public static MediationContext ForRating(
         IReadOnlyList<rateplanassignmenttuple> tuples,
         IReadOnlyDictionary<int, ServiceCategory>? categories = null,
-        IReadOnlyList<ServiceGroupRule>? serviceGroupRules = null) => new()
+        IReadOnlyList<ServiceGroupRule>? serviceGroupRules = null,
+        IReadOnlyDictionary<int, ServiceGroupConfiguration>? serviceGroupConfigurations = null) => new()
     {
         Categories = categories ?? new Dictionary<int, ServiceCategory>(),
         ServiceGroupRules = serviceGroupRules ?? [],
+        ServiceGroupConfigurations = serviceGroupConfigurations ?? ServiceGroupConfiguration.Defaults,
         RatePlanResolver = RatePlanResolver.Build(tuples),
         RateCache = new RateCache(new TupleRateLoader(tuples)),
     };

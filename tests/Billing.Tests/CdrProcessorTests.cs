@@ -58,7 +58,7 @@ public class CdrProcessorTests
         Assert.Equal(2, result.Rated.Count);
         Assert.Single(result.Unrated);
         Assert.Equal(2.0m, result.TotalCharged);       // two 1.0 calls
-        Assert.All(result.Rated, r => Assert.Equal(10, r.Customer.servicegroup));
+        Assert.All(result.Rated, r => Assert.Equal(10, r.Customer!.servicegroup));
 
         // cdr rows: the 2 mediated cdrs go out as ONE batched insert.
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into cdr (")));
@@ -68,7 +68,7 @@ public class CdrProcessorTests
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into acc_chargeable")));
         var chargeableInsert = store.ExecutedSql.First(s => s.StartsWith("insert into acc_chargeable"));
         Assert.Equal(2, chargeableInsert.Split("),(").Length);     // two value tuples
-        Assert.All(result.Rated, r => Assert.True(r.Customer.id > 0));
+        Assert.All(result.Rated, r => Assert.True(r.Customer!.id > 0));
 
         // both rated calls fall in the SAME day+hr bucket → exactly one row written per table.
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into sum_voice_day_03")));
