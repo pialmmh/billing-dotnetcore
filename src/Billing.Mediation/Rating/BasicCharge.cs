@@ -2,14 +2,17 @@ using Billing.Mediation.Context;
 using Billing.Mediation.Model;
 using Billing.Mediation.ServiceFamilies;
 using Billing.Mediation.ServiceGroups;
+using LibraryExtensions;
 using MediationModel;
+using TelcobrightMediation;
 
 namespace Billing.Mediation.Rating;
 
 /// <summary>
 /// The per-leg customer charge end to end: detect the service group → resolve the rate-plan tuples by
-/// (idService, direction, partner/route) → <see cref="PrefixMatcher"/> longest-prefixes over the tuples'
-/// rateassigns → the SG's <see cref="IServiceFamily"/> computes the charge + tax and returns the
+/// (idService, direction, partner/route) → the legacy <see cref="PrefixMatcher"/> longest-prefixes over the
+/// per-day <see cref="RateCache"/> (the resolved tuples become <see cref="TupleByPeriod"/> keys for the
+/// call's day) → the SG's <see cref="IServiceFamily"/> computes the charge + tax and returns the
 /// <see cref="acc_chargeable"/> (SG10→SfA2ZWithVatTax, SG11→SfDomOffNetInAns).
 ///
 /// One leg only. Route-scoped resolution is deferred (passes the partner scope). The accounting/posting
@@ -54,8 +57,16 @@ public sealed class BasicCharge
         var subCategory = cdr.SubCategory ?? 1;     //                  1 = voice
         var answerTime = cdr.AnswerTime ?? cdr.StartTime;
 
-        var rate = new PrefixMatcher(tuples, category, subCategory, answerTime)
-            .MatchPrefix(match.Value.NormalizedNumber);
+        // Look the rate up THROUGH THE RATECACHE (the legacy A2ZRater path): the resolved tuples become
+        // TupleByPeriods for the call's day, and the legacy PrefixMatcher longest-prefixes over that day's
+        // per-tuple rate dictionaries (RateCache.GetRateDictsByDay), in priority order. The cache lazily
+        // loads the day once (from config-served tuples via TupleRateLoader) and serves it thereafter.
+        var day = new DateRange(answerTime.Date, answerTime.Date.AddDays(1));
+        var tups = tuples
+            .Select(t => new TupleByPeriod { IdAssignmentTuple = t.id, DRange = day, Priority = t.priority })
+            .ToList();
+        var rate = new PrefixMatcher(mediation.RateCache, match.Value.NormalizedNumber,
+            category, subCategory, tups, answerTime).MatchPrefix();
         if (rate is null) return null;
 
         return family.Charge(rate, cdr, match.Value.ServiceGroupId, direction, maxDecimalPrecision);

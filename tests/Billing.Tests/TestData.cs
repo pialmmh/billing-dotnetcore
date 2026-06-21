@@ -26,9 +26,14 @@ internal static class TestData
         OtherAmount3 = otherAmount3,   // SF10 VAT fraction / SF11 BTRC fraction
     };
 
+    // Distinct id per tuple — real tuples have unique ids, and the RateCache keys its per-day rate dicts by
+    // TupleByPeriod{IdAssignmentTuple}, so tuples sharing an id would collide. Value is irrelevant to asserts.
+    private static int _nextTupleId = 1;
+
     public static rateplanassignmenttuple Tup(int idService, int assignDirection, int? idPartner, int? route,
         int priority, params rateassign[] rates) => new()
     {
+        id = _nextTupleId++,
         idService = idService,
         AssignDirection = assignDirection,
         idpartner = idPartner,

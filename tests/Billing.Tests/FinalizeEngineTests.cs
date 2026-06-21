@@ -9,24 +9,18 @@ namespace Billing.Tests;
 /// unanswered / empty-chain edges.</summary>
 public class FinalizeEngineTests
 {
-    private static MediationContext Mediation() => new()
+    private static MediationContext Mediation() => MediationContext.ForRating(new[]
     {
-        RatePlanResolver = RatePlanResolver.Build(new[]
-        {
-            TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0,
-                TestData.Ra(prefix: 1712, amount: 1.0m, idRatePlan: 7)),
-        }),
-    };
+        TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0,
+            TestData.Ra(prefix: 1712, amount: 1.0m, idRatePlan: 7)),
+    });
 
     // adds a SG10 supplier tuple (out-partner 7 @ 2.0/min) on top of the customer tuple.
-    private static MediationContext MediationWithSupplier() => new()
+    private static MediationContext MediationWithSupplier() => MediationContext.ForRating(new[]
     {
-        RatePlanResolver = RatePlanResolver.Build(new[]
-        {
-            TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0, TestData.Ra(1712, 1.0m, idRatePlan: 7)),
-            TestData.Tup(10, (int)AssignmentDirection.Supplier, 7, null, 0, TestData.Ra(1712, 2.0m, idRatePlan: 8)),
-        }),
-    };
+        TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0, TestData.Ra(1712, 1.0m, idRatePlan: 7)),
+        TestData.Tup(10, (int)AssignmentDirection.Supplier, 7, null, 0, TestData.Ra(1712, 2.0m, idRatePlan: 8)),
+    });
 
     private static readonly IReadOnlyDictionary<int, Partner> RetailPartner5 =
         new Dictionary<int, Partner> { [5] = new() { IdPartner = 5, PartnerType = 3 } };

@@ -84,13 +84,10 @@ public class MySqlSummaryStoreIntegrationTests
         CreateSchema(conn);
 
         // mediation: SG10 customer tuple for partner 5 (1.0/min for prefix 1712)
-        var mediation = new MediationContext
+        var mediation = MediationContext.ForRating(new[]
         {
-            RatePlanResolver = RatePlanResolver.Build(new[]
-            {
-                TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0, TestData.Ra(1712, 1.0m, idRatePlan: 7)),
-            }),
-        };
+            TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0, TestData.Ra(1712, 1.0m, idRatePlan: 7)),
+        });
         var partners = new Dictionary<int, Partner> { [5] = new() { IdPartner = 5, PartnerType = 3 } };
         var facts = new FinalizeFacts("admin", "8801999000111", "8801712345678", ServiceType.Voice,
             SwitchId: 1, "in", "out", OutPartnerId: 0, AnswerTime: new DateTime(2026, 6, 19, 14, 30, 0),

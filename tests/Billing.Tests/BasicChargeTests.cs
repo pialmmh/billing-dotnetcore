@@ -11,14 +11,11 @@ namespace Billing.Tests;
 public class BasicChargeTests
 {
     // SG10 customer tuple for partner 5: per-minute 1.0 for prefix 1712, rate plan 7.
-    private static MediationContext Mediation() => new()
+    private static MediationContext Mediation() => MediationContext.ForRating(new[]
     {
-        RatePlanResolver = RatePlanResolver.Build(new[]
-        {
-            TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0,
-                TestData.Ra(prefix: 1712, amount: 1.0m, idRatePlan: 7)),
-        }),
-    };
+        TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0,
+            TestData.Ra(prefix: 1712, amount: 1.0m, idRatePlan: 7)),
+    });
 
     private static IReadOnlyDictionary<int, Partner> Partners(params Partner[] ps) => ps.ToDictionary(p => p.IdPartner);
 

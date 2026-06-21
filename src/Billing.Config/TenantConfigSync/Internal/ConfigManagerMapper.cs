@@ -44,13 +44,12 @@ internal static class ConfigManagerMapper
     private static MediationContext ToMediation(MediationContextDto? dto)
     {
         if (dto is null) return MediationContext.Empty;
-        return new MediationContext
-        {
-            Categories = dto.Categories ?? new Dictionary<int, ServiceCategory>(),
-            ServiceGroupRules = dto.ServiceGroupRules ?? [],
-            // The resolver is built from the tenant's verbatim legacy rateplanassignmenttuples (each
-            // carrying its rateassigns); PrefixMatcher longest-prefixes over them at charge time.
-            RatePlanResolver = RatePlanResolver.Build(dto.RatePlanAssignmentTuples ?? []),
-        };
+        // The resolver (which tuples apply) and the per-day RateCache (their rates) are both derived from the
+        // tenant's verbatim legacy rateplanassignmenttuples (each carrying its rateassigns); the legacy
+        // PrefixMatcher longest-prefixes over the RateCache at charge time.
+        return MediationContext.ForRating(
+            dto.RatePlanAssignmentTuples ?? [],
+            dto.Categories,
+            dto.ServiceGroupRules);
     }
 }

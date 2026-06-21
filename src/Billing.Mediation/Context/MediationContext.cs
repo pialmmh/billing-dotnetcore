@@ -1,4 +1,6 @@
 using Billing.Mediation.Rating;
+using MediationModel;
+using TelcobrightMediation;
 
 namespace Billing.Mediation.Context;
 
@@ -21,9 +23,29 @@ public sealed class MediationContext
     public IReadOnlyList<ServiceGroupRule> ServiceGroupRules { get; init; } = [];
 
     /// <summary>Resolves which rate-plan-assignment tuples apply to a call (by service group + direction +
-    /// partner/route), built from this tenant's legacy <c>rateplanassignmenttuple</c>s. PrefixMatcher then
-    /// longest-prefixes over the resolved tuples' rateassigns.</summary>
+    /// partner/route), built from this tenant's legacy <c>rateplanassignmenttuple</c>s. The resolved tuples
+    /// then become <c>TupleByPeriod</c> keys into the <see cref="RateCache"/>.</summary>
     public RatePlanResolver RatePlanResolver { get; init; } = RatePlanResolver.Empty;
+
+    /// <summary>The legacy per-day rate cache (<c>DateRangeWiseRateDic</c>), populated lazily for each day a
+    /// call touches via <see cref="TupleRateLoader"/> over this tenant's config-served tuples. The legacy
+    /// <c>PrefixMatcher</c> longest-prefixes over it. Built together with <see cref="RatePlanResolver"/> from
+    /// the SAME tuples (use <see cref="ForRating"/>); empty by default.</summary>
+    public RateCache RateCache { get; init; } = new(new TupleRateLoader([]));
+
+    /// <summary>Builds a rating context from one tenant's legacy <c>rateplanassignmenttuple</c>s (each
+    /// carrying its <c>rateassigns</c>): the <see cref="RatePlanResolver"/> (which tuples apply) and the
+    /// <see cref="RateCache"/> (their rates, per day) are derived from the SAME list so they can never drift.</summary>
+    public static MediationContext ForRating(
+        IReadOnlyList<rateplanassignmenttuple> tuples,
+        IReadOnlyDictionary<int, ServiceCategory>? categories = null,
+        IReadOnlyList<ServiceGroupRule>? serviceGroupRules = null) => new()
+    {
+        Categories = categories ?? new Dictionary<int, ServiceCategory>(),
+        ServiceGroupRules = serviceGroupRules ?? [],
+        RatePlanResolver = RatePlanResolver.Build(tuples),
+        RateCache = new RateCache(new TupleRateLoader(tuples)),
+    };
 
     /// <summary>An empty context — the safe default before the first successful load.</summary>
     public static MediationContext Empty { get; } = new();
