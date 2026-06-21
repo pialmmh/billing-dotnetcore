@@ -1,8 +1,8 @@
 using Billing.Mediation.Cdr;
+using Billing.Mediation.Sql;
 using Billing.Mediation.Summary;
 using MediationModel;
 using MySqlConnector;
-using TelcobrightMediation;
 
 namespace Billing.Tests;
 

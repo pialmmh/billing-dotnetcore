@@ -1,4 +1,5 @@
 using System.Text;
+using Billing.Mediation.Sql;
 using LibraryExtensions;
 using MediationModel;
 using MediationModel.enums;
@@ -85,11 +86,12 @@ public sealed class CdrSummaryContext
     public void MergeSubstractSummary(CdrSummaryType table, AbstractCdrSummary summary) =>
         GetCache(table).Merge(summary, SummaryMergeType.Substract, s => s.id > 0);
 
-    /// <summary>Flush every table's inserts + updates through the store's single-connection executor.</summary>
-    public void WriteAllChanges()
+    /// <summary>Flush every table's inserts + updates through the store's single-connection executor,
+    /// segmented into <paramref name="segmentSize"/>-row batches (legacy SegmentSizeForDbWrite).</summary>
+    public void WriteAllChanges(int segmentSize = BatchSqlWriter.DefaultSegmentSize)
     {
         foreach (var cache in _caches.Values)
-            cache.WriteAllChanges(_store);
+            cache.WriteAllChanges(_store, segmentSize);
     }
 
     private static bool IsHourly(CdrSummaryType table) => table.ToString().Contains("_hr_");

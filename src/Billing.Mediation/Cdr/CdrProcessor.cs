@@ -1,6 +1,7 @@
 using Billing.Mediation.Context;
 using Billing.Mediation.Model;
 using Billing.Mediation.Rating;
+using Billing.Mediation.Sql;
 using Billing.Mediation.Summary;
 using MediationModel;
 using TelcobrightMediation;
@@ -77,8 +78,8 @@ public sealed class CdrProcessor
             chargeables.Add(r.Customer);
             if (r.Supplier is not null) chargeables.Add(r.Supplier);
         }
-        var chargeablesWritten = ChargeableWriter.Write(batch.SummaryStore, chargeables, ids);
-        summary.WriteAllChanges();
+        var chargeablesWritten = ChargeableWriter.Write(batch.SummaryStore, chargeables, ids, batch.SegmentSize);
+        summary.WriteAllChanges(batch.SegmentSize);
 
         return new CdrBatchResult(rated, unrated, chargeablesWritten);
     }
@@ -94,7 +95,8 @@ public sealed record CdrBatch(
     IReadOnlyDictionary<int, Partner> Partners,
     IReadOnlyList<cdr> Cdrs,
     ISummaryStore SummaryStore,
-    IAutoIncrementManager? Ids = null);
+    IAutoIncrementManager? Ids = null,
+    int SegmentSize = BatchSqlWriter.DefaultSegmentSize);
 
 /// <summary>One mediated cdr: the call plus its customer chargeable and (when present) its supplier leg.</summary>
 public sealed record RatedCdr(cdr Cdr, acc_chargeable Customer, acc_chargeable? Supplier);

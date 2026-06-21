@@ -1,16 +1,18 @@
 // Ported from legacy Mediation/Cache/AbstractCache.cs.
 // KEPT VERBATIM: the in-memory Cache + the Inserted/Updated/Deleted change-tracking, and
 // Insert/InsertWithKey/UpdateThroughCache/Delete with their exact guard checks.
-// ADAPTED ("thin executor" decision): WriteAllChanges/WriteInserts/WriteUpdates/WriteDeletes run the SAME
-// generated SQL through an ISqlExecutor on the single shared MySqlConnection, instead of the legacy
-// DbWriterWithAccurateCount stored-proc + CollectionSegmenter + ParallelIterator batch infra. The legacy
-// StaticExtInsertColumnParsedDic header is passed in as InsertHeader.
+// ADAPTED: WriteAllChanges/WriteInserts/WriteUpdates/WriteDeletes run the generated SQL through an
+// ISqlExecutor on the single shared MySqlConnection — the legacy DbWriterWithAccurateCount stored proc is
+// gone (the executor returns the affected count directly), but the legacy CollectionSegmenter batching IS
+// reused via Billing.Mediation.Sql.BatchSqlWriter, so any number of rows write in fixed-size segments. The
+// legacy StaticExtInsertColumnParsedDic header is passed in as InsertHeader.
 #nullable disable
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using Billing.Mediation.Sql;
 using MediationModel;
 
 namespace TelcobrightMediation
@@ -136,50 +138,49 @@ namespace TelcobrightMediation
 
         // ---- write engine: thin executor over the single shared connection ----
 
-        public virtual void WriteAllChanges(ISqlExecutor executor)
+        public virtual void WriteAllChanges(ISqlExecutor executor, int segmentSize = BatchSqlWriter.DefaultSegmentSize)
         {
             lock (this.locker)
             {
-                WriteDeletes(executor);
-                WriteInserts(executor);
-                WriteUpdates(executor);
+                WriteDeletes(executor, segmentSize);
+                WriteInserts(executor, segmentSize);
+                WriteUpdates(executor, segmentSize);
             }
         }
 
-        public virtual int WriteInserts(ISqlExecutor executor)
+        public virtual int WriteInserts(ISqlExecutor executor, int segmentSize = BatchSqlWriter.DefaultSegmentSize)
         {
             lock (this.locker)
             {
                 if (this.InsertedItems.Any() == false) return 0;
                 if (this.InsertCommandGenerator == null) throw new Exception("InsertCommandGenerator is not set and null.");
-                var values = this.GetInsertedItems().Select(c => this.InsertCommandGenerator(c).ToString());
-                string sql = new StringBuilder(this.InsertHeader).Append(string.Join(",", values)).ToString();
-                int affected = executor.ExecuteNonQuery(sql);
+                var values = this.GetInsertedItems().Select(c => this.InsertCommandGenerator(c)).ToList();
+                int affected = BatchSqlWriter.WriteInsertsInSegments(executor, this.InsertHeader, values, segmentSize);
                 this.InsertedItems.Clear();
                 return affected;
             }
         }
 
-        public virtual void WriteUpdates(ISqlExecutor executor)
+        public virtual void WriteUpdates(ISqlExecutor executor, int segmentSize = BatchSqlWriter.DefaultSegmentSize)
         {
             lock (this.locker)
             {
                 if (this.UpdatedItems.Any() == false) return;
                 if (this.UpdateCommandGenerator == null) throw new Exception("UpdateCommandGenerator is null/not defined.");
-                foreach (var c in this.GetUpdatedItems())
-                    executor.ExecuteNonQuery(this.UpdateCommandGenerator(c).Append(";").ToString());
+                var statements = this.GetUpdatedItems().Select(c => this.UpdateCommandGenerator(c).ToString()).ToList();
+                BatchSqlWriter.WriteStatementsInSegments(executor, statements, segmentSize);
                 this.UpdatedItems.Clear();
             }
         }
 
-        public virtual void WriteDeletes(ISqlExecutor executor)
+        public virtual void WriteDeletes(ISqlExecutor executor, int segmentSize = BatchSqlWriter.DefaultSegmentSize)
         {
             lock (this.locker)
             {
                 if (this.DeletedItems.Any() == false) return;
                 if (this.DeleteCommandGenerator == null) throw new Exception("DeleteCommandGenerator is null/not defined.");
-                foreach (var c in this.GetDeletedItems())
-                    executor.ExecuteNonQuery(this.DeleteCommandGenerator(c).Append(";").ToString());
+                var statements = this.GetDeletedItems().Select(c => this.DeleteCommandGenerator(c).ToString()).ToList();
+                BatchSqlWriter.WriteStatementsInSegments(executor, statements, segmentSize);
                 this.DeletedItems.Clear();
             }
         }

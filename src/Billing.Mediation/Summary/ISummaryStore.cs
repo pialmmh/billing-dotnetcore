@@ -1,6 +1,6 @@
+using Billing.Mediation.Sql;
 using MediationModel;
 using MediationModel.enums;
-using TelcobrightMediation;
 
 namespace Billing.Mediation.Summary;
 
