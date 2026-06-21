@@ -30,6 +30,7 @@ namespace LibraryExtensions
         public static string ToMySqlField(this long? val) => val.HasValue ? val.Value.ToString() : "null";
         public static string ToMySqlField(this int? val) => val.HasValue ? val.Value.ToString() : "null";
         public static string ToMySqlField(this decimal? val) => val.HasValue ? val.Value.ToString() : "null";
+        public static string ToMySqlField(this float? val) => val.HasValue ? val.Value.ToString() : "null";
         public static string ToMySqlField(this sbyte? val) => val.HasValue ? val.Value.ToString() : "null";
         public static string ToMySqlField(this DateTime? val) =>
             val.HasValue ? val.Value.ToString(MySqlDateFormat).EncloseWith("'") : "null";

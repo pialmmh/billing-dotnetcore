@@ -70,8 +70,11 @@ public sealed class CdrProcessor
             summary.AddCall(r.Cdr, r.Customer);
         }
 
-        // PHASE 3 — Write (same single connection): the chargeable rows (customer + supplier legs) then the
-        // summaries, so a batch's chargeables + summaries land together.
+        // PHASE 3 — Write (same single connection, segmented): the mediated cdr rows, the chargeable rows
+        // (customer + supplier legs), then the summaries — so a batch's cdrs + chargeables + summaries land
+        // together (legacy WriteCdrs + ProcessChargeables + summary write).
+        var cdrsWritten = CdrWriter.Write(batch.SummaryStore, rated.ConvertAll(r => r.Cdr), batch.SegmentSize);
+
         var chargeables = new List<acc_chargeable>(rated.Count);
         foreach (var r in rated)
         {
@@ -81,7 +84,7 @@ public sealed class CdrProcessor
         var chargeablesWritten = ChargeableWriter.Write(batch.SummaryStore, chargeables, ids, batch.SegmentSize);
         summary.WriteAllChanges(batch.SegmentSize);
 
-        return new CdrBatchResult(rated, unrated, chargeablesWritten);
+        return new CdrBatchResult(rated, unrated, cdrsWritten, chargeablesWritten);
     }
 
     private static DateTime HourOf(DateTime t) => new(t.Year, t.Month, t.Day, t.Hour, 0, 0);
@@ -102,9 +105,10 @@ public sealed record CdrBatch(
 public sealed record RatedCdr(cdr Cdr, acc_chargeable Customer, acc_chargeable? Supplier);
 
 /// <summary>The batch outcome: the rated calls (with chargeables), the cdrs no service group / rate matched,
-/// and how many <c>acc_chargeable</c> rows were written. <see cref="TotalCharged"/> sums the customer billed
-/// amounts.</summary>
-public sealed record CdrBatchResult(IReadOnlyList<RatedCdr> Rated, IReadOnlyList<cdr> Unrated, int ChargeablesWritten)
+/// and how many <c>cdr</c> / <c>acc_chargeable</c> rows were written. <see cref="TotalCharged"/> sums the
+/// customer billed amounts.</summary>
+public sealed record CdrBatchResult(
+    IReadOnlyList<RatedCdr> Rated, IReadOnlyList<cdr> Unrated, int CdrsWritten, int ChargeablesWritten)
 {
     public int Total => Rated.Count + Unrated.Count;
     public decimal TotalCharged => Rated.Sum(r => r.Customer.BilledAmount);

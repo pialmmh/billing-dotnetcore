@@ -60,6 +60,10 @@ public class CdrProcessorTests
         Assert.Equal(2.0m, result.TotalCharged);       // two 1.0 calls
         Assert.All(result.Rated, r => Assert.Equal(10, r.Customer.servicegroup));
 
+        // cdr rows: the 2 mediated cdrs go out as ONE batched insert.
+        Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into cdr (")));
+        Assert.Equal(2, store.ExecutedSql.First(s => s.StartsWith("insert into cdr (")).Split("),(").Length);
+
         // chargeable rows: the 2 customer legs go out as ONE batched insert; each got a new id.
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into acc_chargeable")));
         var chargeableInsert = store.ExecutedSql.First(s => s.StartsWith("insert into acc_chargeable"));
