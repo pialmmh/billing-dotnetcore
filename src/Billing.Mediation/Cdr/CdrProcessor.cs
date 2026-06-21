@@ -44,7 +44,9 @@ public sealed class CdrProcessor
 
     public CdrBatchResult Process(CdrBatch batch)
     {
-        var summary = new CdrSummaryContext(batch.SummaryStore, batch.Ids ?? new CountingAutoIncrementManager());
+        // One id source for the whole batch, shared by the chargeable + summary writes (legacy IAutoIncrementManager).
+        var ids = batch.Ids ?? new CountingAutoIncrementManager();
+        var summary = new CdrSummaryContext(batch.SummaryStore, ids);
         var rated = new List<RatedCdr>();
         var unrated = new List<cdr>();
 
@@ -67,10 +69,18 @@ public sealed class CdrProcessor
             summary.AddCall(r.Cdr, r.Customer);
         }
 
-        // PHASE 3 — Write: flush summaries through the batch's single-connection store.
+        // PHASE 3 — Write (same single connection): the chargeable rows (customer + supplier legs) then the
+        // summaries, so a batch's chargeables + summaries land together.
+        var chargeables = new List<acc_chargeable>(rated.Count);
+        foreach (var r in rated)
+        {
+            chargeables.Add(r.Customer);
+            if (r.Supplier is not null) chargeables.Add(r.Supplier);
+        }
+        var chargeablesWritten = ChargeableWriter.Write(batch.SummaryStore, chargeables, ids);
         summary.WriteAllChanges();
 
-        return new CdrBatchResult(rated, unrated);
+        return new CdrBatchResult(rated, unrated, chargeablesWritten);
     }
 
     private static DateTime HourOf(DateTime t) => new(t.Year, t.Month, t.Day, t.Hour, 0, 0);
@@ -89,9 +99,10 @@ public sealed record CdrBatch(
 /// <summary>One mediated cdr: the call plus its customer chargeable and (when present) its supplier leg.</summary>
 public sealed record RatedCdr(cdr Cdr, acc_chargeable Customer, acc_chargeable? Supplier);
 
-/// <summary>The batch outcome: the rated calls (with chargeables) and the cdrs no service group / rate
-/// matched. <see cref="TotalCharged"/> sums the customer billed amounts.</summary>
-public sealed record CdrBatchResult(IReadOnlyList<RatedCdr> Rated, IReadOnlyList<cdr> Unrated)
+/// <summary>The batch outcome: the rated calls (with chargeables), the cdrs no service group / rate matched,
+/// and how many <c>acc_chargeable</c> rows were written. <see cref="TotalCharged"/> sums the customer billed
+/// amounts.</summary>
+public sealed record CdrBatchResult(IReadOnlyList<RatedCdr> Rated, IReadOnlyList<cdr> Unrated, int ChargeablesWritten)
 {
     public int Total => Rated.Count + Unrated.Count;
     public decimal TotalCharged => Rated.Sum(r => r.Customer.BilledAmount);
