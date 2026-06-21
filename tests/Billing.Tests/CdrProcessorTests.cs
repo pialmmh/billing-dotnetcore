@@ -16,8 +16,12 @@ public class CdrProcessorTests
     private sealed class InMemorySummaryStore : ISummaryStore
     {
         public List<string> ExecutedSql { get; } = new();
-        public IReadOnlyList<AbstractCdrSummary> LoadByStartTimes(CdrSummaryType table, IReadOnlyCollection<DateTime> startTimes) =>
-            new List<AbstractCdrSummary>();
+        public List<(CdrSummaryType Table, DateTime[] StartTimes)> Loads { get; } = new();
+        public IReadOnlyList<AbstractCdrSummary> LoadByStartTimes(CdrSummaryType table, IReadOnlyCollection<DateTime> startTimes)
+        {
+            Loads.Add((table, startTimes.ToArray()));
+            return new List<AbstractCdrSummary>();
+        }
         public int ExecuteNonQuery(string sql) { ExecutedSql.Add(sql); return 1; }
     }
 
@@ -73,6 +77,28 @@ public class CdrProcessorTests
         // both rated calls fall in the SAME day+hr bucket → exactly one row written per table.
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into sum_voice_day_03")));
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into sum_voice_hr_03")));
+    }
+
+    [Fact]
+    public void Prev_summary_loads_every_bucket_the_batch_touches()
+    {
+        var store = new InMemorySummaryStore();
+        // batch spans TWO hours of the same day — the legacy DatesInvolved/HoursInvolved case.
+        var batch = new CdrBatch(Mediation(), RetailPartner5, new[]
+        {
+            Call("8801712345678", new DateTime(2026, 6, 19, 14, 30, 0)),
+            Call("8801712000000", new DateTime(2026, 6, 19, 15, 30, 0)),
+        }, store);
+
+        CdrProcessor.Default().Process(batch);
+
+        // the hr table is loaded ONCE (not per-cdr), with BOTH involved hour buckets (legacy HoursInvolved).
+        var hrLoad = store.Loads.Single(l => l.Table == CdrSummaryType.sum_voice_hr_03);
+        Assert.Contains(new DateTime(2026, 6, 19, 14, 0, 0), hrLoad.StartTimes);
+        Assert.Contains(new DateTime(2026, 6, 19, 15, 0, 0), hrLoad.StartTimes);
+        // the day table is loaded once with the involved date.
+        var dayLoad = store.Loads.Single(l => l.Table == CdrSummaryType.sum_voice_day_03);
+        Assert.Contains(new DateTime(2026, 6, 19), dayLoad.StartTimes);
     }
 
     [Fact]

@@ -65,7 +65,8 @@ public sealed class FinalizeEngine
         // cdr's supplier fields the SG10 summary reads). The caller writes the cache afterward.
         if (summaryContext is not null)
         {
-            summaryContext.PopulatePrevSummary(new[] { customer.servicegroup }, thisCdr.StartTime.Date, HourOf(thisCdr.StartTime));
+            summaryContext.PopulatePrevSummary(new[] { customer.servicegroup },
+                new[] { thisCdr.StartTime.Date }, new[] { HourOf(thisCdr.StartTime) });
             summaryContext.AddCall(thisCdr, customer);
         }
 

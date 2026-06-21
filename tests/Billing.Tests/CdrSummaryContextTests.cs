@@ -53,7 +53,7 @@ public class CdrSummaryContextTests
         var ctx = new CdrSummaryContext(store, new CountingAutoIncrementManager(1000));
         var cdr = Sg10Cdr();
 
-        ctx.PopulatePrevSummary(new[] { 10 }, cdr.StartTime.Date, HourOf(cdr.StartTime));
+        ctx.PopulatePrevSummary(new[] { 10 }, new[] { cdr.StartTime.Date }, new[] { HourOf(cdr.StartTime) });
         ctx.AddCall(cdr, Sg10Charge());
         ctx.WriteAllChanges();
 
@@ -75,7 +75,7 @@ public class CdrSummaryContextTests
         store.Seed(CdrSummaryType.sum_voice_day_03, existingDay);
 
         var ctx = new CdrSummaryContext(store, new CountingAutoIncrementManager(1000));
-        ctx.PopulatePrevSummary(new[] { 10 }, cdr.StartTime.Date, HourOf(cdr.StartTime));
+        ctx.PopulatePrevSummary(new[] { 10 }, new[] { cdr.StartTime.Date }, new[] { HourOf(cdr.StartTime) });
         ctx.AddCall(cdr, charge);
         ctx.WriteAllChanges();
 

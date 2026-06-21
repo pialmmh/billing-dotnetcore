@@ -41,10 +41,13 @@ public sealed class CdrSummaryContext
 
     public IReadOnlyDictionary<CdrSummaryType, SummaryCache<AbstractCdrSummary, CdrSummaryTuple>> TableWiseSummaryCache => _caches;
 
-    /// <summary>For the given service groups, create each target table's cache and seed it with the
-    /// existing rows for the call's bucketed start times (day tables ← <paramref name="dayStart"/>,
-    /// hr tables ← <paramref name="hourStart"/>). The legacy PopulatePrevSummary, scoped to one call.</summary>
-    public void PopulatePrevSummary(IEnumerable<int> serviceGroupIds, DateTime dayStart, DateTime hourStart)
+    /// <summary>For the given service groups, create each target table's cache and seed it with the existing
+    /// rows for ALL the buckets the batch touches — day tables ← <paramref name="datesInvolved"/>, hr tables
+    /// ← <paramref name="hoursInvolved"/> (the legacy DatesInvolved/HoursInvolved, each loaded once per table
+    /// in a single <c>tup_starttime IN (...)</c> query). Every call then merges onto whichever loaded bucket
+    /// it falls in — so a multi-day/multi-hour batch merges onto existing rows instead of duplicating them.</summary>
+    public void PopulatePrevSummary(IEnumerable<int> serviceGroupIds,
+        IReadOnlyCollection<DateTime> datesInvolved, IReadOnlyCollection<DateTime> hoursInvolved)
     {
         foreach (var serviceGroup in serviceGroupIds)
         {
@@ -53,9 +56,10 @@ public sealed class CdrSummaryContext
             {
                 if (_caches.ContainsKey(table)) continue;
                 var cache = CreateSummaryCacheInstance(table);
-                var startTimes = IsHourly(table) ? new[] { hourStart } : new[] { dayStart };
-                foreach (var existing in _store.LoadByStartTimes(table, startTimes))
-                    cache.PopulateExisting(existing);
+                var startTimes = IsHourly(table) ? hoursInvolved : datesInvolved;
+                if (startTimes.Count > 0)
+                    foreach (var existing in _store.LoadByStartTimes(table, startTimes))
+                        cache.PopulateExisting(existing);
                 _caches[table] = cache;
             }
         }

@@ -57,7 +57,7 @@ public class MySqlSummaryStoreIntegrationTests
 
         // ---- round 1: GENERATION + INSERT (empty table, nothing to load) ----
         var ctx1 = new CdrSummaryContext(new MySqlSummaryStore(conn), new CountingAutoIncrementManager(1));
-        ctx1.PopulatePrevSummary(new[] { 10 }, day, hour);
+        ctx1.PopulatePrevSummary(new[] { 10 }, new[] { day }, new[] { hour });
         ctx1.AddCall(cdr, charge);
         ctx1.WriteAllChanges();
 
@@ -67,7 +67,7 @@ public class MySqlSummaryStoreIntegrationTests
 
         // ---- round 2: LOADING + INCREMENT/APPEND (a second call, fresh context) ----
         var ctx2 = new CdrSummaryContext(new MySqlSummaryStore(conn), new CountingAutoIncrementManager(100));
-        ctx2.PopulatePrevSummary(new[] { 10 }, day, hour);   // LOADS the row inserted above
+        ctx2.PopulatePrevSummary(new[] { 10 }, new[] { day }, new[] { hour });   // LOADS the row inserted above
         ctx2.AddCall(cdr, charge);                            // merge-add onto it
         ctx2.WriteAllChanges();                               // UPDATE
 

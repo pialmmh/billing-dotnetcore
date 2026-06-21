@@ -60,13 +60,19 @@ public sealed class CdrProcessor
             rated.Add(new RatedCdr(thisCdr, chargeables));
         }
 
-        // PHASE 2 — Summaries: load each rated call's prev rows (once per table+bucket) and merge-add it
-        // (keyed off the customer-leg chargeable).
-        foreach (var r in rated)
+        // PHASE 2 — Summaries: pre-load ALL day/hour buckets the batch touches (legacy DatesInvolved/
+        // HoursInvolved — distinct hours of the rated cdrs, and their dates), once per table; then merge-add
+        // each rated call onto its loaded bucket.
+        if (rated.Count > 0)
         {
-            if (r.Customer is null) continue;
-            summary.PopulatePrevSummary(new[] { r.Customer.servicegroup }, r.Cdr.StartTime.Date, HourOf(r.Cdr.StartTime));
-            summary.AddCall(r.Cdr, r.Customer);
+            var hoursInvolved = rated.Select(r => HourOf(r.Cdr.StartTime)).Distinct().ToList();
+            var datesInvolved = hoursInvolved.Select(h => h.Date).Distinct().ToList();
+            summary.PopulatePrevSummary(batch.Mediation.ServiceGroupConfigurations.Keys, datesInvolved, hoursInvolved);
+            foreach (var r in rated)
+            {
+                if (r.Customer is null) continue;
+                summary.AddCall(r.Cdr, r.Customer);
+            }
         }
 
         // PHASE 3 — Write (same single connection, segmented): the mediated cdr rows, the chargeable rows
