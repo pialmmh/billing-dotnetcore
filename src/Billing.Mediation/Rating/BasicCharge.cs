@@ -10,7 +10,7 @@ namespace Billing.Mediation.Rating;
 
 /// <summary>
 /// The per-cdr charge: detect the service group → run that SG's CONFIGURED rating rules
-/// (<see cref="ServiceGroupConfiguration.RatingRules"/>, legacy <c>ExecuteRating</c>). Each rule names a
+/// (<see cref="ServiceGroupConfiguration.Rules"/>, legacy <c>ExecuteRating</c>). Each rating rule names a
 /// service family (by id) and an assignment direction; for each, the rate-plan tuples are resolved by
 /// (idService, direction, partner/route), the legacy <see cref="PrefixMatcher"/> longest-prefixes over the
 /// per-day <see cref="RateCache"/>, and the rule's <see cref="IServiceFamily"/> computes the charge → an
@@ -49,8 +49,8 @@ public sealed class BasicCharge
         if (!mediation.ServiceGroupConfigurations.TryGetValue(match.Value.ServiceGroupId, out var sgConfig)
             || sgConfig.Disabled) return [];
 
-        var chargeables = new List<acc_chargeable>(sgConfig.RatingRules.Count);
-        foreach (var rule in sgConfig.RatingRules)
+        var chargeables = new List<acc_chargeable>();
+        foreach (var rule in sgConfig.Rules.OfType<RatingRule>())   // the rating-kind rules, in order
         {
             var chargeable = ChargeRule(cdr, mediation, match.Value, rule, maxDecimalPrecision);
             if (chargeable is not null) chargeables.Add(chargeable);
@@ -69,7 +69,7 @@ public sealed class BasicCharge
         if (!mediation.ServiceGroupConfigurations.TryGetValue(match.Value.ServiceGroupId, out var sgConfig)
             || sgConfig.Disabled) return null;
 
-        var rule = sgConfig.RatingRules.FirstOrDefault(r => r.AssignDirection == (int)direction);
+        var rule = sgConfig.Rules.OfType<RatingRule>().FirstOrDefault(r => r.AssignDirection == (int)direction);
         return rule is null ? null : ChargeRule(cdr, mediation, match.Value, rule, maxDecimalPrecision);
     }
 

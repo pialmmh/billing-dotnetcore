@@ -29,7 +29,7 @@ public class ServiceGroupRatingRulesTests
     private static IReadOnlyDictionary<int, ServiceGroupConfiguration> Sg10(bool disabled, params RatingRule[] rules) =>
         new Dictionary<int, ServiceGroupConfiguration>
         {
-            [10] = new() { ServiceGroupId = 10, Disabled = disabled, RatingRules = rules },
+            [10] = new() { ServiceGroupId = 10, Disabled = disabled, Rules = rules },
         };
 
     [Fact]
