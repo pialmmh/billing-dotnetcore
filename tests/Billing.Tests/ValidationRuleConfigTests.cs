@@ -17,9 +17,11 @@ public class ValidationRuleConfigTests
         Assert.True(rule.Validate(new cdr { InPartnerId = 5 }));
         Assert.False(rule.Validate(new cdr { InPartnerId = 0 }));
 
-        var threshold = ValidationRuleRegistry.Default.Resolve("InPartnerCostGt", 1.0m);   // data-parameterised
-        Assert.True(threshold.Validate(new cdr { InPartnerCost = 2.0m }));
-        Assert.False(threshold.Validate(new cdr { InPartnerCost = 0.5m }));
+        // DurationSec-gated: at/above the threshold the field must be > 0; below it, must be 0.
+        var gated = ValidationRuleRegistry.Default.Resolve("InPartnerCostGt0", 1.0m);
+        Assert.True(gated.Validate(new cdr { DurationSec = 60m, InPartnerCost = 2.0m }));
+        Assert.False(gated.Validate(new cdr { DurationSec = 60m, InPartnerCost = 0m }));
+        Assert.True(gated.Validate(new cdr { DurationSec = 0m, InPartnerCost = 0m }));   // below threshold → must be 0
 
         Assert.Throws<InvalidOperationException>(() => ValidationRuleRegistry.Default.Resolve("NopeRule"));
     }
@@ -43,7 +45,7 @@ public class ValidationRuleConfigTests
                             AnsweredChecklist = new List<RuleRefDto>
                             {
                                 new() { Rule = "InPartnerIdGt0" },
-                                new() { Rule = "InPartnerCostGt", Data = 0.0m },
+                                new() { Rule = "InPartnerCostGt0", Data = 0.0m },
                             },
                         },
                     },
