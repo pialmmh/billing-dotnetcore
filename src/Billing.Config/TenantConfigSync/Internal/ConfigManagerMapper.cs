@@ -3,6 +3,8 @@ using Billing.Config.TenantConfigSync.Model;
 using Billing.Mediation.Context;
 using Billing.Mediation.Model;
 using Billing.Mediation.Rating;
+using Billing.Mediation.Validation;
+using MediationModel;
 
 namespace Billing.Config.TenantConfigSync.Internal;
 
@@ -46,11 +48,35 @@ internal static class ConfigManagerMapper
         if (dto is null) return MediationContext.Empty;
         // The resolver (which tuples apply) and the per-day RateCache (their rates) are both derived from the
         // tenant's verbatim legacy rateplanassignmenttuples (each carrying its rateassigns); the legacy
-        // PrefixMatcher longest-prefixes over the RateCache at charge time.
+        // PrefixMatcher longest-prefixes over the RateCache at charge time. The SG configs + checklists carry
+        // rating-rule DATA and validation-rule REFERENCES — the references are bound to behaviour here.
+        var sgConfigs = dto.ServiceGroupConfigurations?.ToDictionary(kv => kv.Key, kv => ToSgConfig(kv.Value));
         return MediationContext.ForRating(
             dto.RatePlanAssignmentTuples ?? [],
             dto.Categories,
             dto.ServiceGroupRules,
-            dto.ServiceGroupConfigurations);   // null → the built-in default SG configs
+            sgConfigs,                            // null → the built-in default SG configs
+            ToChecklist(dto.CommonChecklist));
     }
+
+    private static ServiceGroupConfiguration ToSgConfig(ServiceGroupConfigDto dto) => new()
+    {
+        ServiceGroupId = dto.ServiceGroupId,
+        Disabled = dto.Disabled,
+        Rules = dto.Rules?.Select(r => (Rule)new RatingRule
+        {
+            IdServiceFamily = r.IdServiceFamily,
+            AssignDirection = r.AssignDirection,
+            DigitRulesData = r.DigitRulesData,
+        }).ToList() ?? [],
+        AnsweredChecklist = ToChecklist(dto.AnsweredChecklist),
+        UnansweredChecklist = ToChecklist(dto.UnansweredChecklist),
+    };
+
+    // Bind validation-rule REFERENCES (name + optional data) to behaviour via the registry; unknown name
+    // throws at config-load (fail-fast), not at mediation time.
+    private static IReadOnlyList<IValidationRule<cdr>> ToChecklist(List<RuleRefDto>? refs) =>
+        refs is null
+            ? []
+            : refs.Select(r => ValidationRuleRegistry.Default.Resolve(r.Rule ?? "", r.Data)).ToList();
 }

@@ -42,7 +42,38 @@ internal sealed class MediationContextDto
     /// does, leaving the resolver empty.</summary>
     public List<rateplanassignmenttuple>? RatePlanAssignmentTuples { get; set; }
 
-    /// <summary>Per-service-group rating configuration (the ordered rules each detected SG runs). Absent
-    /// until config-manager serves it, in which case the built-in defaults apply.</summary>
-    public Dictionary<int, ServiceGroupConfiguration>? ServiceGroupConfigurations { get; set; }
+    /// <summary>Per-service-group configuration (rating rules + validation checklists). Absent until
+    /// config-manager serves it, in which case the built-in defaults apply.</summary>
+    public Dictionary<int, ServiceGroupConfigDto>? ServiceGroupConfigurations { get; set; }
+
+    /// <summary>The common (all-cdr) validation checklist, as rule references.</summary>
+    public List<RuleRefDto>? CommonChecklist { get; set; }
+}
+
+/// <summary>One service group's wire config: the rating rules and the two validation checklists, the latter
+/// as rule REFERENCES (name + optional threshold) — behaviour is NOT serialized, it is resolved from the
+/// ValidationRuleRegistry. (Partner rules will join <see cref="Rules"/> as another rule kind later.)</summary>
+internal sealed class ServiceGroupConfigDto
+{
+    public int ServiceGroupId { get; set; }
+    public bool Disabled { get; set; }
+    public List<RatingRuleDto>? Rules { get; set; }
+    public List<RuleRefDto>? AnsweredChecklist { get; set; }
+    public List<RuleRefDto>? UnansweredChecklist { get; set; }
+}
+
+/// <summary>A rating rule on the wire — pure data (family id + direction + digit rules).</summary>
+internal sealed class RatingRuleDto
+{
+    public int IdServiceFamily { get; set; }
+    public int AssignDirection { get; set; }
+    public string? DigitRulesData { get; set; }
+}
+
+/// <summary>A validation-rule reference: the registered rule <see cref="Rule"/> name + an optional
+/// <see cref="Data"/> threshold. No .NET type names, no polymorphic deserialization.</summary>
+internal sealed class RuleRefDto
+{
+    public string? Rule { get; set; }
+    public decimal? Data { get; set; }
 }

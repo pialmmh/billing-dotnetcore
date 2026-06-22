@@ -51,11 +51,13 @@ public sealed class MediationContext
         IReadOnlyList<rateplanassignmenttuple> tuples,
         IReadOnlyDictionary<int, ServiceCategory>? categories = null,
         IReadOnlyList<ServiceGroupRule>? serviceGroupRules = null,
-        IReadOnlyDictionary<int, ServiceGroupConfiguration>? serviceGroupConfigurations = null) => new()
+        IReadOnlyDictionary<int, ServiceGroupConfiguration>? serviceGroupConfigurations = null,
+        IReadOnlyList<IValidationRule<cdr>>? commonChecklist = null) => new()
     {
         Categories = categories ?? new Dictionary<int, ServiceCategory>(),
         ServiceGroupRules = serviceGroupRules ?? [],
         ServiceGroupConfigurations = serviceGroupConfigurations ?? ServiceGroupConfiguration.Defaults,
+        CommonChecklist = commonChecklist ?? [],
         RatePlanResolver = RatePlanResolver.Build(tuples),
         RateCache = new RateCache(new TupleRateLoader(tuples)),
     };
