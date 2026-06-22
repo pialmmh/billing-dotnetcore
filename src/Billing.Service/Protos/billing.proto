@@ -48,6 +48,11 @@ message MaxRateRequest {
   string source_ip         = 5;
   ServiceType service_type = 6;
   int64  start_epoch_millis= 7;
+  // One round trip rates the WHOLE chain: routesphere sends the per-tier payload (the partner that owns
+  // each tier, by depth: 0=admin/root ... leaf=deepest reseller), and the reply carries every tier. The
+  // service still derives the tenant chain from `tenant`; these supply the per-tier partner (+ packages).
+  // Empty => only the leaf (`partner_id`) is rated and ancestors fall back to partner 0 (legacy behaviour).
+  repeated Level levels    = 8;
 }
 
 // One ranked option for a tier. routesphere reserves the first FUNDED one.

@@ -42,7 +42,7 @@ public sealed class BillingServiceImpl : RatingService.RatingServiceBase
         var facts = new MedFacts(request.Tenant, request.PartnerId, request.CallingNumber,
             request.CalledNumber, request.SourceIp, MapServiceType(request.ServiceType), request.StartEpochMillis);
 
-        var result = _engine.Resolve(facts, BuildChain(facts));
+        var result = _engine.Resolve(facts, BuildChain(facts, request.Levels));
 
         _log.LogInformation(
             "GetMaxRatePerMinute tenant={Tenant} partner={Partner} {Caller}->{Called} tiers={Tiers} ok={Ok}",
@@ -72,17 +72,24 @@ public sealed class BillingServiceImpl : RatingService.RatingServiceBase
         return Task.FromResult(reply);
     }
 
-    /// <summary>Resolve the entry tenant's ancestor chain (leaf→root) and project each tier into a
-    /// rater input. The leaf carries the entry partner; ancestor partner ids come with the partner
-    /// hierarchy (not yet wired) — 0 for now.</summary>
-    private List<TierInput> BuildChain(MedFacts facts)
+    /// <summary>Resolve the entry tenant's ancestor chain (leaf→root) and project each tier into a rater
+    /// input — the WHOLE chain in one call. The per-tier partner comes from routesphere's <c>levels</c>
+    /// (by depth: 0=admin/root … leaf=deepest reseller); absent a level, the leaf falls back to the entry
+    /// partner and ancestors to 0.</summary>
+    private List<TierInput> BuildChain(MedFacts facts, IEnumerable<Level> levels)
     {
+        var levelByDepth = new Dictionary<int, Level>();
+        foreach (var lvl in levels) levelByDepth[lvl.Depth] = lvl;
+
         var chain = _registry.AncestorChain(facts.Tenant);
         var inputs = new List<TierInput>(chain.Count);
         for (var i = 0; i < chain.Count; i++)
         {
             var tenant = chain[i];
-            var partnerId = i == 0 ? facts.PartnerId : 0;
+            var depth = chain.Count - 1 - i;   // chain[0]=leaf=deepest reseller; chain[last]=root=admin (depth 0)
+            var partnerId = levelByDepth.TryGetValue(depth, out var level)
+                ? level.PartnerId
+                : (i == 0 ? facts.PartnerId : 0);
             var packages = tenant.Context.PartnerIdWisePackageAccounts.TryGetValue((long)partnerId, out var pkgs)
                 ? pkgs
                 : (IReadOnlyList<PackageAccount>)Array.Empty<PackageAccount>();
