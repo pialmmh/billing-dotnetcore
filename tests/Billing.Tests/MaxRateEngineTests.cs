@@ -12,6 +12,7 @@ public class MaxRateEngineTests
     private static readonly CallFacts Facts =
         new("res_205", PartnerId: 101, "8801000", "8801999", "10.0.0.1", ServiceType.Voice, StartEpochMillis: 0);
 
+    private static readonly IReadOnlyDictionary<int, Partner> NoPartners = new Dictionary<int, Partner>();
     private static MaxRateEngine NewEngine() => new(new StubTierRater());
 
     [Fact]
@@ -20,9 +21,9 @@ public class MaxRateEngineTests
         var med = MediationContext.Empty;
         var chain = new List<TierInput>
         {
-            new("res_205", 101, med, new List<PackageAccount> { new() { Id = 9, IdPartner = 101, Uom = "TF_min" } }),
-            new("res_203", 0, med, []),
-            new("telcobright", 0, med, []),
+            new("res_205", 101, med, new List<PackageAccount> { new() { Id = 9, IdPartner = 101, Uom = "TF_min" } }, NoPartners),
+            new("res_203", 0, med, [], NoPartners),
+            new("telcobright", 0, med, [], NoPartners),
         };
 
         var result = NewEngine().Resolve(Facts, chain);

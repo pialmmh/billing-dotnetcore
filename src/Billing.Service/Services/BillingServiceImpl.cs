@@ -86,7 +86,7 @@ public sealed class BillingServiceImpl : RatingService.RatingServiceBase
             var packages = tenant.Context.PartnerIdWisePackageAccounts.TryGetValue((long)partnerId, out var pkgs)
                 ? pkgs
                 : (IReadOnlyList<PackageAccount>)Array.Empty<PackageAccount>();
-            inputs.Add(new TierInput(tenant.DbName, partnerId, tenant.Context.MediationContext, packages));
+            inputs.Add(new TierInput(tenant.DbName, partnerId, tenant.Context.MediationContext, packages, tenant.Context.Partners));
         }
         return inputs;
     }

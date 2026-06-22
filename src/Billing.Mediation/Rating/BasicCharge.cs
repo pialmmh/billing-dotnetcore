@@ -74,36 +74,52 @@ public sealed class BasicCharge
         return rule is null ? null : ChargeRule(cdr, mediation, match.Value, rule, maxDecimalPrecision);
     }
 
-    // One rating rule: resolve the family, resolve the tuples for the rule's direction, look the rate up
-    // through the RateCache, and charge. The legacy A2ZRater path, per rule.
+    /// <summary>Detect the service group and match the CUSTOMER rate for a call WITHOUT charging it — the
+    /// pre-call (max-rate / admission) path. Stamps <c>cdr.ServiceGroup</c>; returns the detected SG id (0 =
+    /// not detected) and the matched <see cref="rateassign"/> (null if no SG / no rate).</summary>
+    public (int ServiceGroupId, rateassign? Rate) MatchCustomerRate(
+        cdr cdr, MediationContext mediation, IReadOnlyDictionary<int, Partner> partners)
+    {
+        var match = _detection.Detect(cdr, partners);
+        if (match is null) return (0, null);
+        cdr.ServiceGroup = match.Value.ServiceGroupId;
+        var rate = MatchRate(cdr, mediation, match.Value, (int)AssignmentDirection.Customer);
+        return (match.Value.ServiceGroupId, rate);
+    }
+
+    // One rating rule: resolve the family, look the rate up through the RateCache for the rule's direction,
+    // and charge. The legacy A2ZRater path, per rule.
     private acc_chargeable? ChargeRule(
         cdr cdr, MediationContext mediation, ServiceGroupMatch match, RatingRule rule, int maxDecimalPrecision)
     {
         if (!_families.TryGetValue(rule.IdServiceFamily, out var family)) return null;
 
-        var direction = (AssignmentDirection)rule.AssignDirection;
-        // Customer leg keys off the in-partner, supplier leg off the out-partner (legacy A2ZRater).
-        var idPartner = direction == AssignmentDirection.Supplier ? cdr.OutPartnerId : cdr.InPartnerId;
+        var rate = MatchRate(cdr, mediation, match, rule.AssignDirection);
+        if (rate is null) return null;
 
-        var tuples = mediation.RatePlanResolver.Resolve(
-            match.ServiceGroupId, rule.AssignDirection, idPartner, route: null);
+        return family.Charge(rate, cdr, match.ServiceGroupId, (AssignmentDirection)rule.AssignDirection, maxDecimalPrecision);
+    }
+
+    // Resolve the rate-plan tuples for the (service group, direction, partner) and longest-prefix the dialed
+    // number over the per-day RateCache (legacy PrefixMatcher). Shared by the charge + the max-rate paths.
+    private static rateassign? MatchRate(cdr cdr, MediationContext mediation, ServiceGroupMatch match, int assignDirection)
+    {
+        // Customer leg keys off the in-partner, supplier leg off the out-partner (legacy A2ZRater).
+        var idPartner = (AssignmentDirection)assignDirection == AssignmentDirection.Supplier
+            ? cdr.OutPartnerId : cdr.InPartnerId;
+
+        var tuples = mediation.RatePlanResolver.Resolve(match.ServiceGroupId, assignDirection, idPartner, route: null);
         if (tuples.Count == 0) return null;
 
         var category = cdr.Category ?? 1;          // legacy defaults: 1 = call
         var subCategory = cdr.SubCategory ?? 1;     //                  1 = voice
         var answerTime = cdr.AnswerTime ?? cdr.StartTime;
 
-        // Look the rate up THROUGH THE RATECACHE (the legacy A2ZRater path): the resolved tuples become
-        // TupleByPeriods for the call's day, and the legacy PrefixMatcher longest-prefixes over that day's
-        // per-tuple rate dictionaries in priority order.
         var day = new DateRange(answerTime.Date, answerTime.Date.AddDays(1));
         var tups = tuples
             .Select(t => new TupleByPeriod { IdAssignmentTuple = t.id, DRange = day, Priority = t.priority })
             .ToList();
-        var rate = new PrefixMatcher(mediation.RateCache, match.NormalizedNumber,
+        return new PrefixMatcher(mediation.RateCache, match.NormalizedNumber,
             category, subCategory, tups, answerTime).MatchPrefix();
-        if (rate is null) return null;
-
-        return family.Charge(rate, cdr, match.ServiceGroupId, direction, maxDecimalPrecision);
     }
 }

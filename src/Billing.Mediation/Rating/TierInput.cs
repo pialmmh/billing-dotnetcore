@@ -10,4 +10,5 @@ public sealed record TierInput(
     string DbName,
     int PartnerId,
     MediationContext Mediation,
-    IReadOnlyList<PackageAccount> Packages);
+    IReadOnlyList<PackageAccount> Packages,
+    IReadOnlyDictionary<int, Partner> Partners);

@@ -11,12 +11,13 @@ public static class MediationRatingRegistration
 {
     public static IServiceCollection AddMediationRating(this IServiceCollection services)
     {
-        services.AddSingleton<ITierRater, StubTierRater>();
+        // GetMaxRatePerMinute (admission): SG detection + RateCache match via BasicCharge, ranked per tier.
+        services.AddServiceGroupDetection();
+        services.AddSingleton<BasicCharge>();
+        services.AddSingleton<ITierRater, MaxRateTierRater>();
         services.AddSingleton<MaxRateEngine>();
 
         // Finalize (post-call charge): SG detection → BasicCharge → FinalizeEngine.
-        services.AddServiceGroupDetection();
-        services.AddSingleton<BasicCharge>();
         services.AddSingleton<FinalizeEngine>();
         return services;
     }
