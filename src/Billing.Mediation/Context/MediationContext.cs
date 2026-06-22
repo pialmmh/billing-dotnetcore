@@ -1,4 +1,5 @@
 using Billing.Mediation.Rating;
+using Billing.Mediation.Validation;
 using MediationModel;
 using TelcobrightMediation;
 
@@ -27,6 +28,10 @@ public sealed class MediationContext
     /// (<see cref="ServiceGroupConfiguration.Defaults"/>) until config-manager serves them.</summary>
     public IReadOnlyDictionary<int, ServiceGroupConfiguration> ServiceGroupConfigurations { get; init; }
         = ServiceGroupConfiguration.Defaults;
+
+    /// <summary>The COMMON post-mediation qualification checklist run for every cdr regardless of service
+    /// group (legacy CommonMediationCheckListValidator), before the per-SG answered/unanswered checklists.</summary>
+    public IReadOnlyList<IValidationRule<cdr>> CommonChecklist { get; init; } = [];
 
     /// <summary>Resolves which rate-plan-assignment tuples apply to a call (by service group + direction +
     /// partner/route), built from this tenant's legacy <c>rateplanassignmenttuple</c>s. The resolved tuples

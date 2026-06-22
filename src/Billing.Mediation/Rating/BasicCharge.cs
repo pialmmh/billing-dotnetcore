@@ -46,6 +46,7 @@ public sealed class BasicCharge
     {
         var match = _detection.Detect(cdr, partners);
         if (match is null) return [];
+        cdr.ServiceGroup = match.Value.ServiceGroupId;   // stamp the detected SG (legacy serviceGroup.Execute)
         if (!mediation.ServiceGroupConfigurations.TryGetValue(match.Value.ServiceGroupId, out var sgConfig)
             || sgConfig.Disabled) return [];
 

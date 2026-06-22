@@ -1,3 +1,6 @@
+using Billing.Mediation.Validation;
+using MediationModel;
+
 namespace Billing.Mediation.Context;
 
 // The rating-side configuration types the MediationContext is built from, served by config-manager
@@ -59,6 +62,14 @@ public sealed record ServiceGroupConfiguration
     public int ServiceGroupId { get; init; }
     public bool Disabled { get; init; }
     public IReadOnlyList<Rule> Rules { get; init; } = [];
+
+    /// <summary>Post-mediation qualification checklist for CHARGEABLE (answered) calls of this SG — legacy
+    /// MediationChecklistValidatorForAnsweredCdrs. A failing rule routes the cdr to cdrerror.</summary>
+    public IReadOnlyList<IValidationRule<cdr>> AnsweredChecklist { get; init; } = [];
+
+    /// <summary>Post-mediation qualification checklist for FAILED (unanswered) calls of this SG — legacy
+    /// MediationChecklistValidatorForUnAnsweredCdrs.</summary>
+    public IReadOnlyList<IValidationRule<cdr>> UnansweredChecklist { get; init; } = [];
 
     /// <summary>The built-in default configs (mirror the previously-hardcoded family map), overridden by
     /// config-manager: SG10 → SF10 customer + SF1 supplier; SG11 → SF11 customer.</summary>

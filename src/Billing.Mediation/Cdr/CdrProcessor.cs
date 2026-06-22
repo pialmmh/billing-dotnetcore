@@ -3,6 +3,7 @@ using Billing.Mediation.Model;
 using Billing.Mediation.Rating;
 using Billing.Mediation.Sql;
 using Billing.Mediation.Summary;
+using Billing.Mediation.Validation;
 using MediationModel;
 using TelcobrightMediation;
 
@@ -24,15 +25,16 @@ namespace Billing.Mediation.Cdr;
 ///
 /// The phases mirror the legacy:
 /// <list type="number">
-/// <item><b>Mediate</b> — per cdr: detect the service group → rate via the per-day <c>RateCache</c>
-///   (<see cref="BasicCharge"/>) → <c>acc_chargeable</c> (customer leg, plus the supplier leg when a
-///   supplier tuple resolves). Unrated cdrs are collected, not charged.</item>
-/// <item><b>Summaries</b> — per rated cdr: load the prev summary rows once and merge-add this call onto
-///   them (<see cref="CdrSummaryContext"/>).</item>
-/// <item><b>Write</b> — flush all summary inserts/updates through the batch's single-connection store.</item>
+/// <item><b>Mediate</b> — per cdr: detect the service group → run the SG's configured rating rules via the
+///   per-day <c>RateCache</c> (<see cref="BasicCharge"/>) → the call's <c>acc_chargeable</c>s.</item>
+/// <item><b>Qualify</b> — validate each mediated cdr against the checklists (<see cref="MediationValidator"/>):
+///   the common checklist + the SG's answered/unanswered checklist. A rejected cdr (or one that produced no
+///   chargeable) gets its <c>ErrorCode</c> set and is routed to <c>cdrerror</c> instead of <c>cdr</c>.</item>
+/// <item><b>Summaries</b> — per QUALIFIED cdr: pre-load the involved buckets once and merge-add the call
+///   (<see cref="CdrSummaryContext"/>).</item>
+/// <item><b>Write</b> — the qualified cdrs + their chargeables + the summaries, AND the rejected cdrs to
+///   cdrerror, all through the batch's single-connection segmented writer.</item>
 /// </list>
-/// The chargeable/cdr ROW writes ride the same store/single-connection pattern and are surfaced on the
-/// result for the (pending) chargeable writer.
 /// </summary>
 public sealed class CdrProcessor
 {
@@ -49,14 +51,19 @@ public sealed class CdrProcessor
         var ids = batch.Ids ?? new CountingAutoIncrementManager();
         var summary = new CdrSummaryContext(batch.SummaryStore, ids);
         var rated = new List<RatedCdr>();
-        var unrated = new List<cdr>();
+        var errored = new List<cdr>();
 
-        // PHASE 1 — Mediate: detect SG → run the SG's CONFIGURED rating rules through the RateCache
-        // (legacy ExecuteRating) → the call's chargeables (customer + supplier legs), per cdr.
+        // PHASE 1 — Mediate + Qualify: detect SG → run the SG's configured rating rules through the RateCache
+        // (legacy ExecuteRating), then validate the cdr against the checklists (legacy MediationValidator)
+        // BEFORE it can reach the summary/cdr table. Rejected or unmediated cdrs are routed to cdrerror.
         foreach (var thisCdr in batch.Cdrs)
         {
             var chargeables = _basicCharge.Rate(thisCdr, batch.Mediation, batch.Partners);
-            if (chargeables.Count == 0) { unrated.Add(thisCdr); continue; }
+
+            var error = MediationValidator.Validate(thisCdr, batch.Mediation);
+            if (error.Length == 0 && chargeables.Count == 0) error = "no chargeable produced";
+            if (error.Length > 0) { thisCdr.ErrorCode = error; errored.Add(thisCdr); continue; }
+
             rated.Add(new RatedCdr(thisCdr, chargeables));
         }
 
@@ -75,17 +82,18 @@ public sealed class CdrProcessor
             }
         }
 
-        // PHASE 3 — Write (same single connection, segmented): the mediated cdr rows, the chargeable rows
-        // (every rule's leg), then the summaries — so a batch's cdrs + chargeables + summaries land together
-        // (legacy WriteCdrs + ProcessChargeables + summary write).
+        // PHASE 3 — Write (same single connection, segmented): the qualified cdr rows + their chargeables +
+        // the summaries land together, and the rejected cdrs go to cdrerror (legacy WriteCdrs +
+        // ProcessChargeables + summary write + cdrerror).
         var cdrsWritten = CdrWriter.Write(batch.SummaryStore, rated.ConvertAll(r => r.Cdr), batch.SegmentSize);
+        var cdrErrorsWritten = CdrWriter.Write(batch.SummaryStore, errored, batch.SegmentSize, table: "cdrerror");
 
         var allChargeables = new List<acc_chargeable>();
         foreach (var r in rated) allChargeables.AddRange(r.Chargeables);
         var chargeablesWritten = ChargeableWriter.Write(batch.SummaryStore, allChargeables, ids, batch.SegmentSize);
         summary.WriteAllChanges(batch.SegmentSize);
 
-        return new CdrBatchResult(rated, unrated, cdrsWritten, chargeablesWritten);
+        return new CdrBatchResult(rated, errored, cdrsWritten, cdrErrorsWritten, chargeablesWritten);
     }
 
     private static DateTime HourOf(DateTime t) => new(t.Year, t.Month, t.Day, t.Hour, 0, 0);
@@ -111,12 +119,13 @@ public sealed record RatedCdr(cdr Cdr, IReadOnlyList<acc_chargeable> Chargeables
         ?? Chargeables.FirstOrDefault();
 }
 
-/// <summary>The batch outcome: the rated calls (with chargeables), the cdrs no service group / rate matched,
-/// and how many <c>cdr</c> / <c>acc_chargeable</c> rows were written. <see cref="TotalCharged"/> sums the
-/// customer billed amounts.</summary>
+/// <summary>The batch outcome: the qualified calls (with chargeables, written to <c>cdr</c>), the rejected
+/// cdrs (each with its <c>ErrorCode</c>, written to <c>cdrerror</c>), and the rows written per table.
+/// <see cref="TotalCharged"/> sums the customer billed amounts.</summary>
 public sealed record CdrBatchResult(
-    IReadOnlyList<RatedCdr> Rated, IReadOnlyList<cdr> Unrated, int CdrsWritten, int ChargeablesWritten)
+    IReadOnlyList<RatedCdr> Rated, IReadOnlyList<cdr> Errored,
+    int CdrsWritten, int CdrErrorsWritten, int ChargeablesWritten)
 {
-    public int Total => Rated.Count + Unrated.Count;
+    public int Total => Rated.Count + Errored.Count;
     public decimal TotalCharged => Rated.Sum(r => r.Customer?.BilledAmount ?? 0m);
 }

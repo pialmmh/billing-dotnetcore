@@ -2,6 +2,7 @@ using Billing.Mediation.Cdr;
 using Billing.Mediation.Context;
 using Billing.Mediation.Model;
 using Billing.Mediation.Summary;
+using Billing.Mediation.Validation;
 using MediationModel;
 using MediationModel.enums;
 using TelcobrightMediation;
@@ -60,13 +61,15 @@ public class CdrProcessorTests
 
         Assert.Equal(3, result.Total);
         Assert.Equal(2, result.Rated.Count);
-        Assert.Single(result.Unrated);
+        Assert.Single(result.Errored);                              // 8809999999 matched no rate -> cdrerror
+        Assert.Equal("no chargeable produced", result.Errored[0].ErrorCode);
         Assert.Equal(2.0m, result.TotalCharged);       // two 1.0 calls
         Assert.All(result.Rated, r => Assert.Equal(10, r.Customer!.servicegroup));
 
-        // cdr rows: the 2 mediated cdrs go out as ONE batched insert.
+        // cdr rows: the 2 qualified cdrs go out as ONE batched insert; the rejected one -> cdrerror.
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into cdr (")));
         Assert.Equal(2, store.ExecutedSql.First(s => s.StartsWith("insert into cdr (")).Split("),(").Length);
+        Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into cdrerror (")));
 
         // chargeable rows: the 2 customer legs go out as ONE batched insert; each got a new id.
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into acc_chargeable")));
@@ -99,6 +102,44 @@ public class CdrProcessorTests
         // the day table is loaded once with the involved date.
         var dayLoad = store.Loads.Single(l => l.Table == CdrSummaryType.sum_voice_day_03);
         Assert.Contains(new DateTime(2026, 6, 19), dayLoad.StartTimes);
+    }
+
+    // a checklist rule that rejects a call with no originating calling number.
+    private sealed class RequireCallingNumber : IValidationRule<cdr>
+    {
+        public bool Validate(cdr c) => !string.IsNullOrEmpty(c.OriginatingCallingNumber);
+        public string ValidationMessage => "calling number required";
+    }
+
+    [Fact]
+    public void Validation_checklist_gates_the_cdr_and_is_separate_for_answered_vs_failed()
+    {
+        var store = new InMemorySummaryStore();
+        // SG10's ANSWERED checklist requires a calling number; the unanswered checklist stays empty.
+        var configs = new Dictionary<int, ServiceGroupConfiguration>
+        {
+            [10] = ServiceGroupConfiguration.Defaults[10] with
+            {
+                AnsweredChecklist = new IValidationRule<cdr>[] { new RequireCallingNumber() },
+            },
+        };
+        var med = MediationContext.ForRating(new[]
+        {
+            TestData.Tup(10, (int)AssignmentDirection.Customer, 5, null, 0, TestData.Ra(1712, 1.0m, idRatePlan: 7)),
+        }, serviceGroupConfigurations: configs);
+
+        var when = new DateTime(2026, 6, 19, 14, 30, 0);
+        var answeredOk = Call("8801712345678", when); answeredOk.OriginatingCallingNumber = "8801999000111";
+        var answeredBad = Call("8801712000000", when); answeredBad.OriginatingCallingNumber = null;   // fails answered checklist
+        var failedCall = Call("8801712000001", when); failedCall.OriginatingCallingNumber = null; failedCall.ChargingStatus = 0; // unanswered → answered checklist NOT applied
+
+        var result = CdrProcessor.Default().Process(
+            new CdrBatch(med, RetailPartner5, new[] { answeredOk, answeredBad, failedCall }, store));
+
+        Assert.Equal(2, result.Rated.Count);        // answeredOk + the unanswered call (separate, empty checklist)
+        Assert.Single(result.Errored);              // answeredBad rejected by the answered checklist
+        Assert.Equal("calling number required", result.Errored[0].ErrorCode);
+        Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into cdrerror (")));
     }
 
     [Fact]
