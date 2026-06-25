@@ -1,5 +1,7 @@
+using System.Text.Json;
 using Billing.Config.TenantConfigSync.Api;
 using Billing.Config.TenantConfigSync.Model;
+using Billing.Data;
 using Billing.Mediation.Model;
 using Grpc.Core;
 using Telcobright.Billing.V1;
@@ -23,18 +25,78 @@ namespace Billing.Service.Services;
 /// </summary>
 public sealed class BillingServiceImpl : RatingService.RatingServiceBase
 {
+    private static readonly JsonSerializerOptions CdrJson = new() { PropertyNameCaseInsensitive = true };
+
     private readonly ITenantRegistry _registry;
     private readonly MaxRateEngine _engine;
     private readonly MedFinalizeEngine _finalize;
+    private readonly MySqlConnectionFactory _connections;
+    private readonly MySqlCdrBatchRunner _batchRunner;
     private readonly ILogger<BillingServiceImpl> _log;
 
     public BillingServiceImpl(ITenantRegistry registry, MaxRateEngine engine, MedFinalizeEngine finalize,
-        ILogger<BillingServiceImpl> log)
+        MySqlConnectionFactory connections, MySqlCdrBatchRunner batchRunner, ILogger<BillingServiceImpl> log)
     {
         _registry = registry;
         _engine = engine;
         _finalize = finalize;
+        _connections = connections;
+        _batchRunner = batchRunner;
         _log = log;
+    }
+
+    /// <summary>
+    /// Batch CDR processing — the Kafka-fed path, exercised here from a test client. Deserializes the JSON
+    /// cdrs into the full <c>cdr</c> POCO, resolves the tenant's MediationContext + Partners, and runs the
+    /// SAME pipeline the Kafka consumer will (<see cref="MySqlCdrBatchRunner"/> → <c>CdrProcessor.Process</c>)
+    /// — writing cdr + acc_chargeable + summaries (+ cdrerror) into the tenant's schema in ONE transaction.
+    /// </summary>
+    public override Task<CdrBatchResult> ProcessCdrBatch(CdrBatchRequest request, ServerCallContext context)
+    {
+        var tenant = _registry.FindByDbName(request.Tenant);
+        if (tenant is null)
+            return Task.FromResult(new CdrBatchResult { Error = $"unknown tenant '{request.Tenant}'" });
+        if (!_connections.IsConfigured)
+            return Task.FromResult(new CdrBatchResult { Error = "datasource credentials not configured (set Billing:Db:User / Billing:Db:Password)" });
+
+        List<MediationModel.cdr> cdrs;
+        try
+        {
+            cdrs = new List<MediationModel.cdr>(request.CdrsJson.Count);
+            foreach (var json in request.CdrsJson)
+                cdrs.Add(JsonSerializer.Deserialize<MediationModel.cdr>(json, CdrJson)!);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(new CdrBatchResult { Error = "cdr json parse error: " + ex.Message });
+        }
+
+        try
+        {
+            // one connection to the tenant's own schema; the runner owns the one commit/rollback.
+            using var conn = _connections.Open(request.Tenant);
+            var r = _batchRunner.Run(conn, tenant.Context.MediationContext, tenant.Context.Partners, cdrs);
+
+            _log.LogInformation(
+                "ProcessCdrBatch tenant={Tenant} cdrs={Count} rated={Rated} errored={Errored} charged={Total}",
+                request.Tenant, cdrs.Count, r.Rated.Count, r.Errored.Count, r.TotalCharged);
+
+            return Task.FromResult(new CdrBatchResult
+            {
+                Committed = true,
+                Rated = r.Rated.Count,
+                Errored = r.Errored.Count,
+                CdrsWritten = r.CdrsWritten,
+                ChargeablesWritten = r.ChargeablesWritten,
+                CdrErrorsWritten = r.CdrErrorsWritten,
+                TotalCharged = (double)r.TotalCharged,
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ProcessCdrBatch tenant={Tenant} rolled back", request.Tenant);
+            return Task.FromResult(new CdrBatchResult { Committed = false, Error = ex.Message });
+        }
     }
 
     public override Task<MaxRateReply> GetMaxRatePerMinute(MaxRateRequest request, ServerCallContext context)

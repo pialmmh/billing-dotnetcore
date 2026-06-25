@@ -101,6 +101,35 @@ Actual reply (verified) — settlement per level; unrated for the same reason (n
 With rates served, each settlement carries `uom / chargedAmount / serviceGroupId / serviceFamilyId /
 matchedPrefix` and `totalCharged` is set.
 
+## 6b. `ProcessCdrBatch` — the Kafka-fed batch path (WRITES to DB)
+Simulates the Kafka consumer: send a **batch of cdrs for one tenant**; the handler runs the exact same
+pipeline (`MySqlCdrBatchRunner` → `CdrProcessor.Process`) and writes **cdr + acc_chargeable + summaries**
+(+ cdrerror) into that tenant's schema in **ONE transaction** (all-or-nothing).
+
+**Configure DB creds first** (OpenBao isn't wired; the write target is the dev datasource `103.95.96.77`).
+Supply creds via configuration/env before `dotnet run`, e.g.:
+```bash
+export Billing__Db__User=<dev-db-user>
+export Billing__Db__Password=<dev-db-pass>
+# optional overrides: export Billing__Db__Host=127.0.0.1   # e.g. point at local mysql instead
+```
+Each cdr is sent as **JSON** (the full `cdr` shape — fields you omit default). Request:
+```json
+{
+  "tenant": "res_233_2",
+  "cdrsJson": [
+    "{ \"SwitchId\":1, \"InPartnerId\":236, \"TerminatingCalledNumber\":\"8801712345678\", \"OriginatingCallingNumber\":\"8801711000000\", \"DurationSec\":60, \"ChargingStatus\":1, \"StartTime\":\"2026-06-19T14:30:00\", \"AnswerTime\":\"2026-06-19T14:30:00\", \"CountryCode\":\"880\", \"Category\":1, \"SubCategory\":1, \"UniqueBillId\":\"uid-1\" }",
+    "{ \"SwitchId\":1, \"InPartnerId\":236, \"TerminatingCalledNumber\":\"8801712000000\", \"DurationSec\":30, \"ChargingStatus\":1, \"StartTime\":\"2026-06-19T15:30:00\", \"AnswerTime\":\"2026-06-19T15:30:00\", \"UniqueBillId\":\"uid-2\" }"
+  ]
+}
+```
+Reply: `{ committed, rated, errored, cdrsWritten, chargeablesWritten, cdrErrorsWritten, totalCharged }`.
+On any error inside the batch the whole thing rolls back (`committed:false`, `error:"…"`).
+
+> With the rate-tuple gap (§8) the cdrs won't match a rate → they're **rejected and written to `cdrerror`**
+> (`errored > 0`, `cdrErrorsWritten > 0`). Once rates flow, qualified cdrs go to `cdr` + `acc_chargeable` +
+> `sum_voice_*`. The tenant's schema must contain those tables (the real dev/operator schema does).
+
 ## 7. Debugging
 Run under a debugger (VS Code C# Dev Kit / Rider / VS — run profile `Billing.Service` http; or attach to the
 `dotnet` process). Breakpoints, top-down:

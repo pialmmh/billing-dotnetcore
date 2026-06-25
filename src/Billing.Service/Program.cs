@@ -1,5 +1,6 @@
 using Billing.Config.TenantConfigSync.Dependencies;
 using Billing.Config.TenantConfigSync.Spi;
+using Billing.Data;
 using Billing.Mediation.Rating;
 using Billing.Service.Adapters;
 using Billing.Service.Services;
@@ -21,8 +22,19 @@ var configOptions = ProfileConfigReader.ReadOptions(configRoot, selection);
 
 builder.Services.AddTenantConfigSync(configOptions, selection);
 
-// Datasource for the post-call (summary) slice — loaded now; used when FinalizeAndSummarize lands.
-builder.Services.AddSingleton(Options.Create(ProfileConfigReader.ReadDatasource(configRoot, selection)));
+// Datasource for the post-call / batch write slice (FinalizeAndSummarize, ProcessCdrBatch).
+var datasource = ProfileConfigReader.ReadDatasource(configRoot, selection);
+builder.Services.AddSingleton(Options.Create(datasource));
+
+// The connection factory for the batch write target. Host/port default to the profile's datasource; the
+// username/password come from configuration (dev stopgap — OpenBao secret-ref resolution lands later).
+// Override any of them for local testing, e.g. Billing__Db__Host=127.0.0.1 Billing__Db__User=root.
+builder.Services.AddSingleton(new MySqlConnectionFactory(
+    builder.Configuration["Billing:Db:Host"] ?? datasource.Host,
+    int.TryParse(builder.Configuration["Billing:Db:Port"], out var dbPort) ? dbPort : datasource.Port,
+    builder.Configuration["Billing:Db:User"] ?? "",
+    builder.Configuration["Billing:Db:Password"] ?? ""));
+builder.Services.AddSingleton(MySqlCdrBatchRunner.Default());
 
 // The Kafka adapter is the host-provided config-event source — registered only when enabled,
 // so without it config loads once on start and never reloads (absence is a valid setup).

@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Billing.Mediation\Billing.Mediation.csproj" />
     <ProjectReference Include="..\Billing.Config\Billing.Config.csproj" />
+    <ProjectReference Include="..\Billing.Data\Billing.Data.csproj" />
   </ItemGroup>
 
 </Project>
