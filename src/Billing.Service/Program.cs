@@ -26,14 +26,14 @@ builder.Services.AddTenantConfigSync(configOptions, selection);
 var datasource = ProfileConfigReader.ReadDatasource(configRoot, selection);
 builder.Services.AddSingleton(Options.Create(datasource));
 
-// The connection factory for the batch write target. Host/port default to the profile's datasource; the
-// username/password come from configuration (dev stopgap — OpenBao secret-ref resolution lands later).
-// Override any of them for local testing, e.g. Billing__Db__Host=127.0.0.1 Billing__Db__User=root.
+// The connection factory for the batch write target. Host/port/creds come from the profile's datasource
+// block (this project keeps the DB username/password inline in the YAML, not OpenBao). Any of them can be
+// overridden via configuration/env for local testing, e.g. Billing__Db__Host=127.0.0.1 Billing__Db__User=root.
 builder.Services.AddSingleton(new MySqlConnectionFactory(
     builder.Configuration["Billing:Db:Host"] ?? datasource.Host,
     int.TryParse(builder.Configuration["Billing:Db:Port"], out var dbPort) ? dbPort : datasource.Port,
-    builder.Configuration["Billing:Db:User"] ?? "",
-    builder.Configuration["Billing:Db:Password"] ?? ""));
+    builder.Configuration["Billing:Db:User"] ?? datasource.Username,
+    builder.Configuration["Billing:Db:Password"] ?? datasource.Password));
 builder.Services.AddSingleton(MySqlCdrBatchRunner.Default());
 
 // The Kafka adapter is the host-provided config-event source — registered only when enabled,

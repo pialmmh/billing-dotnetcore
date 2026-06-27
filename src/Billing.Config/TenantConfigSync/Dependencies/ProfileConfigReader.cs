@@ -60,8 +60,8 @@ public static class ProfileConfigReader
         return options;
     }
 
-    /// <summary>Reads the active profile's billing.datasource block (post-call slice). Non-secret only;
-    /// credentials are resolved from the secret store via secret-ref, never from here.</summary>
+    /// <summary>Reads the active profile's billing.datasource block (post-call / batch write slice),
+    /// including the inline username/password (this project keeps DB creds in the profile YAML, not OpenBao).</summary>
     public static DatasourceOptions ReadDatasource(string configRoot, TenantSelection selection)
     {
         var options = new DatasourceOptions();
@@ -80,7 +80,8 @@ public static class ProfileConfigReader
             if (ds.Port > 0) options.Port = ds.Port;
             options.AdminDb = ds.AdminDb ?? "";
             options.ResellerDbPrefix = ds.ResellerDbPrefix ?? options.ResellerDbPrefix;
-            options.SecretRef = ds.SecretRef;
+            options.Username = ds.Username ?? "";
+            options.Password = ds.Password ?? "";
         }
         return options;
     }
@@ -103,7 +104,8 @@ public static class ProfileConfigReader
         public int Port { get; set; }
         public string? AdminDb { get; set; }
         public string? ResellerDbPrefix { get; set; }
-        public string? SecretRef { get; set; }
+        public string? Username { get; set; }
+        public string? Password { get; set; }
     }
     private sealed class ConfigManagerYaml
     {

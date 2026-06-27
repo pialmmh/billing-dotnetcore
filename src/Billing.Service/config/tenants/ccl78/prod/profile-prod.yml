@@ -24,13 +24,14 @@ billing:
     debounce-ms: 3000
     idle-fast-path-multiplier: 2
 
-  # DB for the post-call slice only (FinalizeAndSummarize). Credentials via OpenBao, never here.
+  # DB for the post-call / batch write slice. Credentials INLINE here for this project (no OpenBao).
   datasource:
     host: "103.95.96.77"
     port: 3306
     admin-db: "telcobright"
     reseller-db-prefix: "res_"
-    secret-ref: "kv/billing/ccl78-prod-db"
+    username: ""                                           # CCL prod DB user — TODO: set
+    password: ""                                           # CCL prod DB password — TODO: set
 
   mediation:
     voice-enabled: true

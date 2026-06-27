@@ -39,15 +39,16 @@ billing:
     debounce-ms: 3000
     idle-fast-path-multiplier: 2                           # idle > 2x debounce => reload now
 
-  # Database for the post-call slice (FinalizeAndSummarize): write the CDR + roll up summaries
-  # into each tenant/reseller schema. NOT used by the rating path (that is config-manager-fed).
-  # Credentials are NOT here — resolved at startup from the secret store (OpenBao) via secret-ref.
+  # Database for the post-call / batch write slice (FinalizeAndSummarize, ProcessCdrBatch): write the CDR +
+  # roll up summaries into each tenant/reseller schema. NOT used by the rating path (config-manager-fed).
+  # This project keeps the DB credentials INLINE here (no OpenBao). Fill username/password.
   datasource:
     host: "103.95.96.77"
     port: 3306
     admin-db: "telcobright"                               # admin/operator schema; resellers = res_NNN
     reseller-db-prefix: "res_"
-    secret-ref: "kv/billing/ccl78-dev-db"                   # OpenBao KV path: username + password
+    username: ""                                           # CCL dev DB user  — TODO: set
+    password: ""                                           # CCL dev DB password — TODO: set
 
   # Mediation/rating module toggles (billing-core specific).
   mediation:

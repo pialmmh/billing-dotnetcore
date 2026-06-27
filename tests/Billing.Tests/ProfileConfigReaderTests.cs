@@ -21,7 +21,8 @@ public class ProfileConfigReaderTests
             "    port: 3306\n" +
             "    admin-db: \"telcobright\"\n" +
             "    reseller-db-prefix: \"res_\"\n" +
-            "    secret-ref: \"kv/billing/ccl-dev-db\"\n");
+            "    username: \"billing_user\"\n" +
+            "    password: \"s3cr3t\"\n");
 
         var selection = ProfileConfigReader.ReadSelection(dir);
         var ds = ProfileConfigReader.ReadDatasource(dir, selection);
@@ -31,6 +32,7 @@ public class ProfileConfigReaderTests
         Assert.Equal(3306, ds.Port);
         Assert.Equal("telcobright", ds.AdminDb);
         Assert.Equal("res_", ds.ResellerDbPrefix);
-        Assert.Equal("kv/billing/ccl-dev-db", ds.SecretRef);
+        Assert.Equal("billing_user", ds.Username);
+        Assert.Equal("s3cr3t", ds.Password);
     }
 }
