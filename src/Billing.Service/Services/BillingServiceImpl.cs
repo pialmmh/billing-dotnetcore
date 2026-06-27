@@ -3,7 +3,9 @@ using Billing.Config.TenantConfigSync.Api;
 using Billing.Config.TenantConfigSync.Model;
 using Billing.Data;
 using Billing.Mediation.Model;
+using Billing.Service.Adapters;
 using Grpc.Core;
+using Microsoft.Extensions.Options;
 using Telcobright.Billing.V1;
 using MaxRateEngine = Billing.Mediation.Rating.MaxRateEngine;
 using MedFacts = Billing.Mediation.Rating.CallFacts;
@@ -32,16 +34,21 @@ public sealed class BillingServiceImpl : RatingService.RatingServiceBase
     private readonly MedFinalizeEngine _finalize;
     private readonly MySqlConnectionFactory _connections;
     private readonly MySqlCdrBatchRunner _batchRunner;
+    private readonly SummaryOutboxOptions _summary;
+    private readonly SummaryPingPublisher _summaryPing;
     private readonly ILogger<BillingServiceImpl> _log;
 
     public BillingServiceImpl(ITenantRegistry registry, MaxRateEngine engine, MedFinalizeEngine finalize,
-        MySqlConnectionFactory connections, MySqlCdrBatchRunner batchRunner, ILogger<BillingServiceImpl> log)
+        MySqlConnectionFactory connections, MySqlCdrBatchRunner batchRunner,
+        IOptions<SummaryOutboxOptions> summary, SummaryPingPublisher summaryPing, ILogger<BillingServiceImpl> log)
     {
         _registry = registry;
         _engine = engine;
         _finalize = finalize;
         _connections = connections;
         _batchRunner = batchRunner;
+        _summary = summary.Value;
+        _summaryPing = summaryPing;
         _log = log;
     }
 
@@ -74,12 +81,21 @@ public sealed class BillingServiceImpl : RatingService.RatingServiceBase
         try
         {
             // one connection to the tenant's own schema; the runner owns the one commit/rollback.
+            // OUTBOX mode writes the compressed batch to summary_affected (atomic with the cdr write) instead of
+            // rolling up summaries inline; INLINE (default) keeps the legacy in-transaction summary write.
+            var mode = _summary.Enabled
+                ? Billing.Mediation.Cdr.SummaryMode.Outbox
+                : Billing.Mediation.Cdr.SummaryMode.Inline;
             using var conn = _connections.Open(request.Tenant);
-            var r = _batchRunner.Run(conn, tenant.Context.MediationContext, tenant.Context.Partners, cdrs);
+            var r = _batchRunner.Run(conn, tenant.Context.MediationContext, tenant.Context.Partners, cdrs, summary: mode);
+
+            // after the commit, nudge the summary-service (best-effort; it also polls the outbox).
+            if (_summary.Enabled)
+                _summaryPing.Ping(request.Tenant, _summary.EntityType, r.Rated.Count);
 
             _log.LogInformation(
-                "ProcessCdrBatch tenant={Tenant} cdrs={Count} rated={Rated} errored={Errored} charged={Total}",
-                request.Tenant, cdrs.Count, r.Rated.Count, r.Errored.Count, r.TotalCharged);
+                "ProcessCdrBatch tenant={Tenant} cdrs={Count} rated={Rated} errored={Errored} charged={Total} mode={Mode}",
+                request.Tenant, cdrs.Count, r.Rated.Count, r.Errored.Count, r.TotalCharged, mode);
 
             return Task.FromResult(new CdrBatchResult
             {

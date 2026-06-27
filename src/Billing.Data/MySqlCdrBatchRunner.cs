@@ -28,14 +28,15 @@ public sealed class MySqlCdrBatchRunner
 
     public CdrBatchResult Run(MySqlConnection conn, MediationContext mediation,
         IReadOnlyDictionary<int, Partner> partners, IReadOnlyList<cdr> cdrs,
-        IAutoIncrementManager? ids = null, int segmentSize = BatchSqlWriter.DefaultSegmentSize)
+        IAutoIncrementManager? ids = null, int segmentSize = BatchSqlWriter.DefaultSegmentSize,
+        SummaryMode summary = SummaryMode.Inline)
     {
         using var tx = conn.BeginTransaction();
         try
         {
             // the pipeline writes EVERYTHING through this tx-bound store — one connection, one transaction.
             var store = new MySqlSummaryStore(conn, tx);
-            var batch = new CdrBatch(mediation, partners, cdrs, store, ids, segmentSize);
+            var batch = new CdrBatch(mediation, partners, cdrs, store, ids, segmentSize, summary);
             var result = _processor.Process(batch);
             tx.Commit();        // the ONE commit for the batch
             return result;

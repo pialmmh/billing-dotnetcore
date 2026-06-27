@@ -1,5 +1,6 @@
 using System.Linq;
 using Billing.Data;
+using Billing.Mediation.Cdr;
 using Billing.Mediation.Context;
 using Billing.Mediation.Model;
 using MediationModel;
@@ -119,5 +120,61 @@ public class CdrBatchAtomicityTests
 
         Assert.Equal(0L, Count(conn, "cdr"));               // the already-written cdr row was rolled back
         Assert.Equal(0L, Count(conn, "sum_voice_day_03"));  // nothing else persisted either
+    }
+
+    private static void CreateOutboxTable(MySqlConnection c)
+    {
+        Exec(c, "drop table if exists summary_affected");
+        Exec(c, "create table summary_affected (id bigint not null auto_increment, " +
+                "entity_type varchar(32) not null, data longtext not null, primary key (id))");
+    }
+
+    private static string FirstOutboxData(MySqlConnection c)
+    {
+        using var cmd = new MySqlCommand("select data from summary_affected order by id limit 1", c);
+        return (string)cmd.ExecuteScalar()!;
+    }
+
+    [Fact]
+    public void Outbox_mode_writes_the_batch_atomically_and_skips_inline_summaries()
+    {
+        using var conn = TryOpen();
+        if (conn is null) return;
+        CreateDb(conn);
+        CreatePermissive(conn, "cdr", cdr.ExtInsertColumns);
+        CreatePermissive(conn, "acc_chargeable", acc_chargeable.ExtInsertColumns);
+        CreateOutboxTable(conn);
+        // NOTE: deliberately NO sum_voice_* tables — outbox mode must not touch them.
+
+        var result = MySqlCdrBatchRunner.Default().Run(conn, Mediation(), Retail5,
+            new[] { Call("uid-1", new DateTime(2026, 6, 19, 14, 30, 0)) }, summary: SummaryMode.Outbox);
+
+        Assert.Single(result.Rated);
+        Assert.Equal(1L, Count(conn, "cdr"));                 // cdr + chargeable + outbox row committed together
+        Assert.Equal(1L, Count(conn, "acc_chargeable"));
+        Assert.Equal(1L, Count(conn, "summary_affected"));
+
+        // the outbox blob decodes back to the rated cdr (what the summary-service consumes).
+        var decoded = SummaryOutboxWriter.Decode(FirstOutboxData(conn));
+        Assert.Single(decoded);
+        Assert.Equal("uid-1", decoded[0].Cdr.UniqueBillId);
+        Assert.Equal(10, decoded[0].Customer!.servicegroup);
+    }
+
+    [Fact]
+    public void Outbox_write_failure_rolls_back_the_whole_batch()
+    {
+        using var conn = TryOpen();
+        if (conn is null) return;
+        CreateDb(conn);
+        CreatePermissive(conn, "cdr", cdr.ExtInsertColumns);
+        CreatePermissive(conn, "acc_chargeable", acc_chargeable.ExtInsertColumns);
+        Exec(conn, "drop table if exists summary_affected");   // missing → the outbox write (LAST in the tx) throws
+
+        Assert.ThrowsAny<Exception>(() => MySqlCdrBatchRunner.Default().Run(conn, Mediation(), Retail5,
+            new[] { Call("uid-1", new DateTime(2026, 6, 19, 14, 30, 0)) }, summary: SummaryMode.Outbox));
+
+        Assert.Equal(0L, Count(conn, "cdr"));                 // cdr + chargeable rolled back with the failed outbox write
+        Assert.Equal(0L, Count(conn, "acc_chargeable"));
     }
 }

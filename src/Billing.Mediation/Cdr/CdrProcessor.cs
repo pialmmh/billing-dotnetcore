@@ -49,7 +49,6 @@ public sealed class CdrProcessor
     {
         // One id source for the whole batch, shared by the chargeable + summary writes (legacy IAutoIncrementManager).
         var ids = batch.Ids ?? new CountingAutoIncrementManager();
-        var summary = new CdrSummaryContext(batch.SummaryStore, ids);
         var rated = new List<RatedCdr>();
         var errored = new List<cdr>();
 
@@ -67,11 +66,14 @@ public sealed class CdrProcessor
             rated.Add(new RatedCdr(thisCdr, chargeables));
         }
 
-        // PHASE 2 — Summaries: pre-load ALL day/hour buckets the batch touches (legacy DatesInvolved/
-        // HoursInvolved — distinct hours of the rated cdrs, and their dates), once per table; then merge-add
-        // each rated call onto its loaded bucket.
-        if (rated.Count > 0)
+        // PHASE 2 — Summaries (INLINE mode only): pre-load ALL day/hour buckets the batch touches (legacy
+        // DatesInvolved/HoursInvolved — distinct hours of the rated cdrs, and their dates), once per table;
+        // then merge-add each rated call onto its loaded bucket. In OUTBOX mode this is skipped — the
+        // decoupled summary-service does the roll-up from the outbox row written in PHASE 3.
+        CdrSummaryContext? summary = null;
+        if (batch.Summary == SummaryMode.Inline && rated.Count > 0)
         {
+            summary = new CdrSummaryContext(batch.SummaryStore, ids);
             var hoursInvolved = rated.Select(r => HourOf(r.Cdr.StartTime)).Distinct().ToList();
             var datesInvolved = hoursInvolved.Select(h => h.Date).Distinct().ToList();
             summary.PopulatePrevSummary(batch.Mediation.ServiceGroupConfigurations.Keys, datesInvolved, hoursInvolved);
@@ -91,7 +93,14 @@ public sealed class CdrProcessor
         var allChargeables = new List<acc_chargeable>();
         foreach (var r in rated) allChargeables.AddRange(r.Chargeables);
         var chargeablesWritten = ChargeableWriter.Write(batch.SummaryStore, allChargeables, ids, batch.SegmentSize);
-        summary.WriteAllChanges(batch.SegmentSize);
+
+        // Summaries: INLINE writes the rolled-up rows now; OUTBOX writes ONE compressed row to summary_affected
+        // for the summary-service to consume + roll up. Either way it's the SAME tx as the cdr/chargeable write
+        // above — so the summary input persists atomically with the cdr (no MySQL/Kafka dual-write gap).
+        if (batch.Summary == SummaryMode.Outbox)
+            SummaryOutboxWriter.Write(batch.SummaryStore, rated);
+        else
+            summary?.WriteAllChanges(batch.SegmentSize);
 
         return new CdrBatchResult(rated, errored, cdrsWritten, cdrErrorsWritten, chargeablesWritten);
     }
@@ -108,7 +117,8 @@ public sealed record CdrBatch(
     IReadOnlyList<cdr> Cdrs,
     ISummaryStore SummaryStore,
     IAutoIncrementManager? Ids = null,
-    int SegmentSize = BatchSqlWriter.DefaultSegmentSize);
+    int SegmentSize = BatchSqlWriter.DefaultSegmentSize,
+    SummaryMode Summary = SummaryMode.Inline);
 
 /// <summary>One mediated cdr: the call plus every chargeable its service group's configured rules produced
 /// (customer + supplier legs). <see cref="Customer"/> is the customer-leg chargeable the summary reads.</summary>

@@ -36,6 +36,12 @@ builder.Services.AddSingleton(new MySqlConnectionFactory(
     builder.Configuration["Billing:Db:Password"] ?? datasource.Password));
 builder.Services.AddSingleton(MySqlCdrBatchRunner.Default());
 
+// Decoupled summary hand-off (config section Billing:Summary). Off by default = inline summaries (legacy).
+// When Enabled, a cdr batch writes a compressed summary_affected outbox row (atomic with the cdr write) and
+// fires a best-effort ping for the summary-service. The ping is a no-op without Billing:Summary:BootstrapServers.
+builder.Services.Configure<Billing.Service.SummaryOutboxOptions>(builder.Configuration.GetSection("Billing:Summary"));
+builder.Services.AddSingleton<SummaryPingPublisher>();
+
 // The Kafka adapter is the host-provided config-event source — registered only when enabled,
 // so without it config loads once on start and never reloads (absence is a valid setup).
 if (configOptions.ConfigEvents.Enabled)
