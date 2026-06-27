@@ -37,3 +37,10 @@ billing:
     voice-enabled: true
     sms-enabled: false
     reseller-fanout-enabled: false
+
+  # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Off = legacy inline summaries.
+  summary:
+    enabled: false                                        # flip true at cutover
+    entity-type: "cdr"
+    ping-topic: "cdr_summary_ping"
+    bootstrap-servers: "10.10.199.20:9092,10.10.198.20:9092,10.10.197.20:9092"   # prod Kafka (same as config-events)

@@ -26,20 +26,16 @@ builder.Services.AddTenantConfigSync(configOptions, selection);
 var datasource = ProfileConfigReader.ReadDatasource(configRoot, selection);
 builder.Services.AddSingleton(Options.Create(datasource));
 
-// The connection factory for the batch write target. Host/port/creds come from the profile's datasource
-// block (this project keeps the DB username/password inline in the YAML, not OpenBao). Any of them can be
-// overridden via configuration/env for local testing, e.g. Billing__Db__Host=127.0.0.1 Billing__Db__User=root.
+// The connection factory for the batch write target. Host/port/creds come 100% from the profile's datasource
+// block (this project keeps the DB username/password inline in the YAML, not OpenBao). No env overrides.
 builder.Services.AddSingleton(new MySqlConnectionFactory(
-    builder.Configuration["Billing:Db:Host"] ?? datasource.Host,
-    int.TryParse(builder.Configuration["Billing:Db:Port"], out var dbPort) ? dbPort : datasource.Port,
-    builder.Configuration["Billing:Db:User"] ?? datasource.Username,
-    builder.Configuration["Billing:Db:Password"] ?? datasource.Password));
+    datasource.Host, datasource.Port, datasource.Username, datasource.Password));
 builder.Services.AddSingleton(MySqlCdrBatchRunner.Default());
 
-// Decoupled summary hand-off (config section Billing:Summary). Off by default = inline summaries (legacy).
-// When Enabled, a cdr batch writes a compressed summary_affected outbox row (atomic with the cdr write) and
-// fires a best-effort ping for the summary-service. The ping is a no-op without Billing:Summary:BootstrapServers.
-builder.Services.Configure<Billing.Service.SummaryOutboxOptions>(builder.Configuration.GetSection("Billing:Summary"));
+// Decoupled summary hand-off — read 100% from the profile's billing.summary block (no env). Off by default =
+// inline summaries (legacy). When enabled, a cdr batch writes a compressed summary_affected outbox row (atomic
+// with the cdr write) and fires a best-effort ping; the ping is a no-op when bootstrap-servers is empty.
+builder.Services.AddSingleton(Options.Create(ProfileConfigReader.ReadSummary(configRoot, selection)));
 builder.Services.AddSingleton<SummaryPingPublisher>();
 
 // The Kafka adapter is the host-provided config-event source — registered only when enabled,

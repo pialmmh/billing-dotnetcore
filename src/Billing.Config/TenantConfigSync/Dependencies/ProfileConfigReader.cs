@@ -86,6 +86,30 @@ public static class ProfileConfigReader
         return options;
     }
 
+    /// <summary>Reads the active profile's billing.summary block (the decoupled outbox hand-off switch).
+    /// 100% config — there is no environment-variable override.</summary>
+    public static SummaryOutboxOptions ReadSummary(string configRoot, TenantSelection selection)
+    {
+        var options = new SummaryOutboxOptions();
+
+        var active = selection.Enabled.FirstOrDefault();
+        if (active is null) return options;
+
+        var path = Path.Combine(configRoot, "tenants", active.Name, active.Profile,
+            $"profile-{active.Profile}.yml");
+        if (!File.Exists(path)) return options;
+
+        var s = (Yaml.Deserialize<ProfileFile>(File.ReadAllText(path)) ?? new ProfileFile()).Billing?.Summary;
+        if (s is not null)
+        {
+            options.Enabled = s.Enabled;
+            options.EntityType = s.EntityType ?? options.EntityType;
+            options.PingTopic = s.PingTopic ?? options.PingTopic;
+            options.BootstrapServers = s.BootstrapServers;
+        }
+        return options;
+    }
+
     // --- YAML wire shapes (kebab-case via hyphenated naming convention) ---
 
     private sealed class TenantsFile { public List<TenantRow>? Tenants { get; set; } }
@@ -97,6 +121,7 @@ public static class ProfileConfigReader
         public ConfigManagerYaml? ConfigManager { get; set; }
         public ConfigEventsYaml? ConfigEvents { get; set; }
         public DatasourceYaml? Datasource { get; set; }
+        public SummaryYaml? Summary { get; set; }
     }
     private sealed class DatasourceYaml
     {
@@ -106,6 +131,13 @@ public static class ProfileConfigReader
         public string? ResellerDbPrefix { get; set; }
         public string? Username { get; set; }
         public string? Password { get; set; }
+    }
+    private sealed class SummaryYaml
+    {
+        public bool Enabled { get; set; }
+        public string? EntityType { get; set; }
+        public string? PingTopic { get; set; }
+        public string? BootstrapServers { get; set; }
     }
     private sealed class ConfigManagerYaml
     {

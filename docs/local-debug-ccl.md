@@ -66,21 +66,19 @@ Postman: New → gRPC → `localhost:5293`, import `billing.proto`, pick `Proces
 `docs/postman-e2e-testing.md`.
 
 **Breakpoints:** Rider / Visual Studio (set `Billing.Service` as startup) or VS Code (C# Dev Kit); break in
-`BillingServiceImpl` / `CdrProcessor` / `SummaryOutboxWriter`. More logs: `Logging__LogLevel__Default=Debug`.
+`BillingServiceImpl` / `CdrProcessor` / `SummaryOutboxWriter`. For more logs raise `Logging:LogLevel:Default` in
+`appsettings.json`.
 
 ## 5. Outbox / summary debug (the decoupled path)
-```bash
-# apply the outbox table into the CCL tenant schema(s) first:
-#   src/Billing.Data/Sql/summary_outbox.sql   (creates summary_affected)
-cd src/Billing.Service
-Billing__Summary__Enabled=true \
-Billing__Summary__BootstrapServers=103.95.96.78:9092 \   # CCL Kafka
-Billing__Summary__PingTopic=cdr_summary_ping \
-  dotnet run
-```
+Everything is config — there are no environment switches.
+1. Apply the outbox table into the CCL tenant schema(s): `src/Billing.Data/Sql/summary_outbox.sql` (creates `summary_affected`).
+2. In `profile-dev.yml` set `billing.summary.enabled: true` (default `false` = legacy inline). The `summary` block
+   already carries `ping-topic: cdr_summary_ping` and `bootstrap-servers` = CCL Kafka.
+3. `cd src/Billing.Service && dotnet run`.
+
 Call `ProcessCdrBatch` → observe a row in `summary_affected` (CCL DB) and a message on `cdr_summary_ping` (CCL
-Kafka); the summary-service consumes it. Inspect the blob: `SELECT data FROM summary_affected\G` →
-base64-decode → gunzip → JSON. (Off by default: unset `Billing__Summary__Enabled` ⇒ legacy inline summaries.)
+Kafka); the summary-service consumes it. Inspect the blob: `SELECT data FROM summary_affected\G` → base64-decode
+→ gunzip → JSON.
 
 ## If a CCL endpoint is unreachable
 This is expected without connectivity. Bring up the **VPN / route to the CCL subnet** (especially

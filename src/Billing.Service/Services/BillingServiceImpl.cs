@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Billing.Config.TenantConfigSync.Api;
+using Billing.Config.TenantConfigSync.Dependencies;
 using Billing.Config.TenantConfigSync.Model;
 using Billing.Data;
 using Billing.Mediation.Model;
@@ -64,7 +65,7 @@ public sealed class BillingServiceImpl : RatingService.RatingServiceBase
         if (tenant is null)
             return Task.FromResult(new CdrBatchResult { Error = $"unknown tenant '{request.Tenant}'" });
         if (!_connections.IsConfigured)
-            return Task.FromResult(new CdrBatchResult { Error = "datasource credentials not configured (set Billing:Db:User / Billing:Db:Password)" });
+            return Task.FromResult(new CdrBatchResult { Error = "datasource credentials not configured (set billing.datasource.username / password in profile-<env>.yml)" });
 
         List<MediationModel.cdr> cdrs;
         try

@@ -1,3 +1,4 @@
+using Billing.Config.TenantConfigSync.Dependencies;
 using Confluent.Kafka;
 using Microsoft.Extensions.Options;
 

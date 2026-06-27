@@ -35,4 +35,45 @@ public class ProfileConfigReaderTests
         Assert.Equal("billing_user", ds.Username);
         Assert.Equal("s3cr3t", ds.Password);
     }
+
+    [Fact]
+    public void Reads_summary_block_with_kebab_keys()
+    {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        var profileDir = Path.Combine(dir, "tenants", "ccl", "dev");
+        Directory.CreateDirectory(profileDir);
+        File.WriteAllText(Path.Combine(dir, "tenants.yml"),
+            "tenants:\n  - name: ccl\n    enabled: true\n    profile: dev\n");
+        File.WriteAllText(Path.Combine(profileDir, "profile-dev.yml"),
+            "billing:\n" +
+            "  summary:\n" +
+            "    enabled: true\n" +
+            "    entity-type: \"cdr\"\n" +
+            "    ping-topic: \"cdr_summary_ping\"\n" +
+            "    bootstrap-servers: \"103.95.96.78:9092\"\n");
+
+        var s = ProfileConfigReader.ReadSummary(dir, ProfileConfigReader.ReadSelection(dir));
+
+        Assert.True(s.Enabled);
+        Assert.Equal("cdr", s.EntityType);
+        Assert.Equal("cdr_summary_ping", s.PingTopic);
+        Assert.Equal("103.95.96.78:9092", s.BootstrapServers);
+    }
+
+    [Fact]
+    public void Summary_defaults_to_disabled_when_block_absent()
+    {
+        var dir = Directory.CreateTempSubdirectory().FullName;
+        var profileDir = Path.Combine(dir, "tenants", "ccl", "dev");
+        Directory.CreateDirectory(profileDir);
+        File.WriteAllText(Path.Combine(dir, "tenants.yml"),
+            "tenants:\n  - name: ccl\n    enabled: true\n    profile: dev\n");
+        File.WriteAllText(Path.Combine(profileDir, "profile-dev.yml"),
+            "billing:\n  datasource:\n    host: \"x\"\n");
+
+        var s = ProfileConfigReader.ReadSummary(dir, ProfileConfigReader.ReadSelection(dir));
+
+        Assert.False(s.Enabled);                            // off by default = legacy inline summaries
+        Assert.Equal("cdr_summary_ping", s.PingTopic);      // default preserved when unset
+    }
 }

@@ -55,3 +55,12 @@ billing:
     voice-enabled: true
     sms-enabled: false
     reseller-fanout-enabled: false                        # admin-only first slice
+
+  # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Off = legacy inline summaries.
+  # When enabled, a cdr batch writes ONE compressed summary_affected row (atomic with the cdr write) and pings
+  # the summary-service, which consumes the outbox. bootstrap-servers = CCL Kafka (same host as config-events).
+  summary:
+    enabled: false                                        # flip true at cutover
+    entity-type: "cdr"
+    ping-topic: "cdr_summary_ping"
+    bootstrap-servers: "103.95.96.78:9092"                # CCL Kafka
