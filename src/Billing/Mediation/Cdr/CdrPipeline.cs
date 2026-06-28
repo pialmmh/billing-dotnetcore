@@ -36,14 +36,14 @@ namespace Billing.Mediation.Cdr;
 ///   cdrerror, all through the batch's single-connection segmented writer.</item>
 /// </list>
 /// </summary>
-public sealed class CdrProcessor
+public sealed class CdrPipeline
 {
     private readonly BasicCharge _basicCharge;
 
-    public CdrProcessor(BasicCharge basicCharge) => _basicCharge = basicCharge;
+    public CdrPipeline(BasicCharge basicCharge) => _basicCharge = basicCharge;
 
     /// <summary>The SG10+SG11 detection pair wired to the rating flow — the ready instance.</summary>
-    public static CdrProcessor Default() => new(BasicCharge.Default());
+    public static CdrPipeline Default() => new(BasicCharge.Default());
 
     public CdrBatchResult Process(CdrBatch batch)
     {

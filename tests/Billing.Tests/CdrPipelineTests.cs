@@ -12,7 +12,7 @@ namespace Billing.Tests;
 /// <summary>The decoupled CDR processing pipeline over an already-fetched batch: mediate each cdr (detect SG
 /// → rate via the RateCache) → build + merge summaries → one write. Calls that match no rate fall to the
 /// unrated bucket; same-bucket calls merge onto one summary row.</summary>
-public class CdrProcessorTests
+public class CdrPipelineTests
 {
     private sealed class InMemorySummaryStore : ISummaryStore
     {
@@ -57,7 +57,7 @@ public class CdrProcessorTests
             Call("8809999999", when),      // normalizes to 9999999 → no rate prefix → unrated
         }, store);
 
-        var result = CdrProcessor.Default().Process(batch);
+        var result = CdrPipeline.Default().Process(batch);
 
         Assert.Equal(3, result.Total);
         Assert.Equal(2, result.Rated.Count);
@@ -93,7 +93,7 @@ public class CdrProcessorTests
             Call("8801712000000", new DateTime(2026, 6, 19, 15, 30, 0)),
         }, store);
 
-        CdrProcessor.Default().Process(batch);
+        CdrPipeline.Default().Process(batch);
 
         // the hr table is loaded ONCE (not per-cdr), with BOTH involved hour buckets (legacy HoursInvolved).
         var hrLoad = store.Loads.Single(l => l.Table == CdrSummaryType.sum_voice_hr_03);
@@ -133,7 +133,7 @@ public class CdrProcessorTests
         var answeredBad = Call("8801712000000", when); answeredBad.OriginatingCallingNumber = null;   // fails answered checklist
         var failedCall = Call("8801712000001", when); failedCall.OriginatingCallingNumber = null; failedCall.ChargingStatus = 0; // unanswered → answered checklist NOT applied
 
-        var result = CdrProcessor.Default().Process(
+        var result = CdrPipeline.Default().Process(
             new CdrBatch(med, RetailPartner5, new[] { answeredOk, answeredBad, failedCall }, store));
 
         Assert.Equal(2, result.Rated.Count);        // answeredOk + the unanswered call (separate, empty checklist)
@@ -146,7 +146,7 @@ public class CdrProcessorTests
     public void Empty_batch_writes_nothing()
     {
         var store = new InMemorySummaryStore();
-        var result = CdrProcessor.Default().Process(
+        var result = CdrPipeline.Default().Process(
             new CdrBatch(Mediation(), RetailPartner5, Array.Empty<cdr>(), store));
 
         Assert.Equal(0, result.Total);

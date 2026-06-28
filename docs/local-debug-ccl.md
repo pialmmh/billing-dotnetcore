@@ -36,7 +36,7 @@ dotnet build                 # expect: Build succeeded, 0 errors
 ```
 
 ## 2. Config — already points at CCL; just fill the DB creds
-`src/Billing.Service/config/tenants/ccl78/dev/profile-dev.yml` already targets CCL:
+`src/Billing/config/tenants/ccl78/dev/profile-dev.yml` already targets CCL:
 - `config-manager.base-url: http://103.95.96.78:7072`
 - `config-events.bootstrap-servers: 103.95.96.78:9092`
 - `datasource.host: 103.95.96.77`
@@ -46,7 +46,7 @@ profile is the single source of truth — no environment overrides.
 
 ## 3. Run
 ```bash
-cd src/Billing.Service
+cd src/Billing
 dotnet run
 ```
 It loads each tenant's config from **CCL config-manager**, subscribes to **CCL Kafka** config-event topics, and
@@ -55,7 +55,7 @@ writes to the **CCL DB**. Note the Kestrel URL in the log (dev default `http://l
   `config_event_loader_<tenant>` topic exists only once config-manager publishes a change.
 
 ## 4. Drive + debug the gRPC API
-Proto: `src/Billing.Service/Protos/billing.proto`. Entry points:
+Proto: `src/Billing/Protos/billing.proto`. Entry points:
 - `ProcessCdrBatch { tenant, repeated cdrs_json }` — cdr → rate → validate → write.
 - `GetMaxRatePerMinute`, `FinalizeAndSummarize`.
 ```bash
@@ -65,16 +65,16 @@ grpcurl -plaintext -d '{"tenant":"res_233","cdrs_json":["{ ...one cdr json... }"
 Postman: New → gRPC → `localhost:5293`, import `billing.proto`, pick `ProcessCdrBatch`. Full payload walkthrough:
 `docs/postman-e2e-testing.md`.
 
-**Breakpoints:** Rider / Visual Studio (set `Billing.Service` as startup) or VS Code (C# Dev Kit); break in
+**Breakpoints:** Rider / Visual Studio (set `Billing` as startup) or VS Code (C# Dev Kit); break in
 `BillingServiceImpl` / `CdrProcessor` / `SummaryOutboxWriter`. For more logs raise `Logging:LogLevel:Default` in
 `appsettings.json`.
 
 ## 5. Outbox / summary debug (the decoupled path)
 Everything is config — there are no environment switches.
-1. Apply the outbox table into the CCL tenant schema(s): `src/Billing.Data/Sql/summary_outbox.sql` (creates `summary_affected`).
+1. Apply the outbox table into the CCL tenant schema(s): `src/Billing/Data/Sql/summary_outbox.sql` (creates `summary_affected`).
 2. In `profile-dev.yml` set `billing.summary.enabled: true` (default `false` = legacy inline). The `summary` block
    already carries `ping-topic: cdr_summary_ping` and `bootstrap-servers` = CCL Kafka.
-3. `cd src/Billing.Service && dotnet run`.
+3. `cd src/Billing && dotnet run`.
 
 Call `ProcessCdrBatch` → observe a row in `summary_affected` (CCL DB) and a message on `cdr_summary_ping` (CCL
 Kafka); the summary-service consumes it. Inspect the blob: `SELECT data FROM summary_affected\G` → base64-decode

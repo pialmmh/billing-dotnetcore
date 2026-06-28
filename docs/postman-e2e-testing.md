@@ -4,7 +4,7 @@ How to run `telcobright-billing-core` against the **live config-manager**, send 
 from **Postman (gRPC)**, and debug it. **Everything below was verified live on 2026-06-25** (real responses
 are inlined).
 
-Two RPCs (`src/Billing.Service/Protos/billing.proto`, service `telcobright.billing.v1.RatingService`):
+Two RPCs (`src/Billing/Protos/billing.proto`, service `telcobright.billing.v1.RatingService`):
 - **`GetMaxRatePerMinute`** — pre-call admission; a candidate **per tier** of the tenant chain.
 - **`FinalizeAndSummarize`** — post-call; the **per-level settlement** (compute-only today — see §7).
 
@@ -22,7 +22,7 @@ and yields the chain below. (To use prod config-manager `10.9.9.2:7072`, set `pr
 ## 2. Run the service
 ```bash
 cd telcobright-billing-core
-dotnet run --project src/Billing.Service --launch-profile http
+dotnet run --project src/Billing --launch-profile http
 ```
 Listens on **`http://localhost:5293`** — HTTP/2 **plaintext (h2c)**; Postman gRPC connects with **TLS OFF**.
 Look for `Now listening on: http://localhost:5293` and `N tenant(s) loaded`.
@@ -39,7 +39,7 @@ So a 3-level demo = leaf **`res_233_2`** → `res_233` → `telcobright`. `level
 
 ## 4. Set up Postman (gRPC)
 1. **New → gRPC Request**. 2. Server URL `localhost:5293`, **TLS OFF**. 3. **Import a .proto file** →
-`src/Billing.Service/Protos/billing.proto` (server reflection isn't enabled). 4. Service
+`src/Billing/Protos/billing.proto` (server reflection isn't enabled). 4. Service
 `telcobright.billing.v1.RatingService` → method. 5. Paste a body below, **Invoke**.
 (`service_type` = enum by name `VOICE`/`SMS`; `start_epoch_millis` = int64 **as a string**.)
 
@@ -131,7 +131,7 @@ On any error inside the batch the whole thing rolls back (`committed:false`, `er
 > `sum_voice_*`. The tenant's schema must contain those tables (the real dev/operator schema does).
 
 ## 7. Debugging
-Run under a debugger (VS Code C# Dev Kit / Rider / VS — run profile `Billing.Service` http; or attach to the
+Run under a debugger (VS Code C# Dev Kit / Rider / VS — run profile `Billing` http; or attach to the
 `dotnet` process). Breakpoints, top-down:
 
 | Where | File |

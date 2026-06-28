@@ -37,7 +37,7 @@ in the read-only reference `telcobright-billing-dotnet` (.NET Framework, won't b
 ```bash
 dotnet build                       # expect 0 warnings / 0 errors (xUnit analyzer is on — keep it clean)
 dotnet test --no-build             # 95 tests, 0 skipped (@a11f5da)
-dotnet run --project src/Billing.Service --launch-profile http   # boots vs LIVE config-manager, :5293 (h2c)
+dotnet run --project src/Billing --launch-profile http   # boots vs LIVE config-manager, :5293 (h2c)
 ```
 - **Local MySQL** (integration tests): lxc container, `127.0.0.1:3306` (NOT localhost), `root`/`123456`,
   MySQL 5.7, driver MySqlConnector. Tests create their own DBs and **skip** if mysql is down. DB is behind
@@ -47,10 +47,13 @@ dotnet run --project src/Billing.Service --launch-profile http   # boots vs LIVE
   if it's unreachable.
 
 ## 4. Architecture map
-Projects: `Billing.Mediation` (the engine), `Billing.Data` (live MySql adapters), `Billing.Config`
-(tenant config sync from config-manager), `Billing.Service` (gRPC host).
+ONE project / ONE binary: `src/Billing` (`Billing.csproj`, Web SDK). Folders-as-packages, same namespaces:
+`Mediation/` (the engine), `Data/` (live MySql adapters), `TenantConfigSync/` (tenant config sync from
+config-manager), `Api/` (gRPC host) + `Beans/` (the `CdrProcessor` startup bean + summary ping; the
+config-event consumer is config-sync infra in `TenantConfigSync/Internal/`, not a bean).
 
-The per-tenant **batch pipeline** — `Billing.Mediation/Cdr/CdrProcessor.cs`, `Process(CdrBatch)`:
+The per-tenant **batch pipeline** — `Mediation/Cdr/CdrPipeline.cs`, `Process(CdrBatch)` (run by the
+`Beans/CdrProcessor` startup bean, which resolves tenant config from config-manager first):
 ```
 1 Mediate   BasicCharge.Rate: detect SG → run the SG's CONFIGURED rating rules over the per-day RateCache → chargeables
 2 Qualify   MediationValidator: common + per-SG answered/unanswered checklists  (reject → cdrerror)
@@ -58,16 +61,16 @@ The per-tenant **batch pipeline** — `Billing.Mediation/Cdr/CdrProcessor.cs`, `
 4 Write     cdr + acc_chargeable + sum_voice_* (qualified) and cdrerror (rejected),
             all through ONE segmented writer (BatchSqlWriter), inside ONE transaction owned by MySqlCdrBatchRunner
 ```
-Key files by concern:
+Key files by concern (under `src/Billing/`; engine concerns live in `Mediation/`):
 - **Rating**: `Rating/{BasicCharge, A2ZRater, RatePlanResolver}`, `Rating/RateCaching/{RateCache, PrefixMatcher,
   TupleRateLoader}`, `ServiceFamilies/Sf*`, `ServiceGroups/{ServiceGroupDetection, Sg*}`.
 - **Rules & config**: `Context/{MediationContext, RatingConfig}` (`Rule`/`RatingRule`/`ServiceGroupConfiguration`),
   `Validation/{IValidationRule+MediationValidator, CdrValidationRules+ValidationRuleRegistry}`.
 - **Summary**: `Summary/{CdrSummaryContext, Cache/AbstractCache, Cache/SummaryCache}`.
 - **SQL writing**: `Sql/{BatchSqlWriter, CollectionSegmenter, ISqlExecutor}`; writers `Cdr/{CdrWriter,
-  ChargeableWriter}`; atomic runner `Billing.Data/MySqlCdrBatchRunner`.
-- **gRPC**: `Billing.Service/Services/BillingServiceImpl.cs`, proto `Billing.Service/Protos/billing.proto`.
-- **Config sync**: `Billing.Config/TenantConfigSync/Internal/{ConfigManagerMapper, HttpConfigManagerClient,
+  ChargeableWriter}`; atomic runner `Data/MySqlCdrBatchRunner`.
+- **gRPC**: `Api/BillingServiceImpl.cs`, proto `Protos/billing.proto`.
+- **Config sync**: `TenantConfigSync/Internal/{ConfigManagerMapper, HttpConfigManagerClient,
   TenantHierarchyLoader}`.
 
 ## 5. Current state (DONE, SG10 & SG11, build 0/0, 95 tests)

@@ -1,6 +1,6 @@
 // Ported VERBATIM from legacy Models_Mediation/cdr.cs (MediationModel.cdr).
 // Plain POCO — no EF/framework deps — so it compiles unchanged on .NET 8.
-// Namespace + type name kept identical so the ported Sg*/Sf*/CdrProcessor reuse it as-is.
+// Namespace + type name kept identical so the ported Sg*/Sf*/CdrPipeline reuse it as-is.
 #nullable disable
 
 namespace MediationModel

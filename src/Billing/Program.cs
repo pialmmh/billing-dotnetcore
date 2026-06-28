@@ -1,14 +1,21 @@
 using Billing.Config.TenantConfigSync.Dependencies;
+using Billing.Config.TenantConfigSync.Internal;
 using Billing.Config.TenantConfigSync.Spi;
 using Billing.Data;
 using Billing.Mediation.Rating;
-using Billing.Service.Adapters;
-using Billing.Service.Services;
+using Billing.Service.Api;
+using Billing.Service.Api.Internal;
+using Billing.Service.Beans;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddGrpc();
+
+// The gRPC surface (BillingServiceImpl) is a thin wrapper — each RPC delegates to one of these handlers.
+builder.Services.AddSingleton<ProcessCdrBatchHandler>();
+builder.Services.AddSingleton<MaxRateHandler>();
+builder.Services.AddSingleton<FinalizeHandler>();
 
 // The rating engine (stub rater for now; swapped for the real one when MediationContext lands).
 builder.Services.AddMediationRating();
@@ -36,7 +43,13 @@ builder.Services.AddSingleton(MySqlCdrBatchRunner.Default());
 // inline summaries (legacy). When enabled, a cdr batch writes a compressed summary_affected outbox row (atomic
 // with the cdr write) and fires a best-effort ping; the ping is a no-op when bootstrap-servers is empty.
 builder.Services.AddSingleton(Options.Create(ProfileConfigReader.ReadSummary(configRoot, selection)));
-builder.Services.AddSingleton<SummaryPingPublisher>();
+builder.Services.AddSingleton<SummaryChangeNotificationPublisher>();
+
+// The CDR PROCESSOR — the main startup bean. It resolves each tenant's config from config-manager underneath
+// (the tenant registry) and runs the batch; the gRPC ProcessCdrBatch RPC feeds it (a Kafka cdr ingest loop
+// will too). Registered once and exposed both as the injectable processor and as the startup hosted service.
+builder.Services.AddSingleton<CdrProcessor>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CdrProcessor>());
 
 // The Kafka adapter is the host-provided config-event source — registered only when enabled,
 // so without it config loads once on start and never reloads (absence is a valid setup).

@@ -37,4 +37,4 @@ On start, `TenantConfigSync` reads `tenants.yml`, then for each enabled tenant r
 its `profile-<profile>.yml`, fetches the tenant root from config-manager over HTTP, and
 builds the in-memory `Tenant` tree where `tenant.Context` is a `DynamicContext` that
 holds a `MediationContext`. A Kafka `config_event_loader_<tenant>` message triggers a
-debounced (3000 ms) re-fetch. See `Billing.Config/TenantConfigSync/`.
+debounced (3000 ms) re-fetch. See `TenantConfigSync/`.

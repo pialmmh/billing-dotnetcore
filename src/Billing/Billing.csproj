@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- The ONE project / ONE binary for telcobright-billing-core. Formerly four projects
+       (Billing.Service/Mediation/Config/Data); collapsed into folders-as-packages here
+       (Api, Beans, Mediation, TenantConfigSync, Data) with the SAME namespaces. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- CS8981: legacy lower-cased type names (cdr, ne, job, …) kept verbatim for 1:1 reuse of the ported engine (Mediation/). -->
+    <NoWarn>$(NoWarn);CS8981</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\billing.proto" GrpcServices="Server" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.57.0" />          <!-- Api: gRPC host -->
+    <PackageReference Include="Confluent.Kafka" Version="2.5.3" />          <!-- Beans: Kafka config-event consumer + summary ping -->
+    <PackageReference Include="YamlDotNet" Version="15.1.2" />             <!-- TenantConfigSync: parses tenants.yml + profile-*.yml -->
+    <PackageReference Include="MySqlConnector" Version="2.3.7" />          <!-- Data: live MySql adapters -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Ship the tenant config tree next to the binary so it loads at runtime. -->
+    <Content Include="config\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Billing.Tests" />
+  </ItemGroup>
+
+</Project>

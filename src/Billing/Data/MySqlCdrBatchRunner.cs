@@ -10,7 +10,7 @@ namespace Billing.Data;
 /// <summary>
 /// The TOP-LEVEL transaction boundary for ONE tenant's cdr batch — the legacy CdrJobProcessor's
 /// <c>set autocommit=0 … commit / rollback</c>, at the high-level entry. It owns the connection's SINGLE
-/// transaction: begin → run the whole <see cref="CdrProcessor"/> pipeline (which only EMITS SQL through the
+/// transaction: begin → run the whole <see cref="CdrPipeline"/> pipeline (which only EMITS SQL through the
 /// tx-bound <see cref="MySqlSummaryStore"/>; NO inner class/method commits or rolls back) → commit. On ANY
 /// exception the WHOLE batch rolls back. All-or-nothing: cdr + cdrerror + chargeables + summaries persist
 /// together or not at all.
@@ -20,11 +20,11 @@ namespace Billing.Data;
 /// </summary>
 public sealed class MySqlCdrBatchRunner
 {
-    private readonly CdrProcessor _processor;
+    private readonly CdrPipeline _processor;
 
-    public MySqlCdrBatchRunner(CdrProcessor processor) => _processor = processor;
+    public MySqlCdrBatchRunner(CdrPipeline processor) => _processor = processor;
 
-    public static MySqlCdrBatchRunner Default() => new(CdrProcessor.Default());
+    public static MySqlCdrBatchRunner Default() => new(CdrPipeline.Default());
 
     public CdrBatchResult Run(MySqlConnection conn, MediationContext mediation,
         IReadOnlyDictionary<int, Partner> partners, IReadOnlyList<cdr> cdrs,

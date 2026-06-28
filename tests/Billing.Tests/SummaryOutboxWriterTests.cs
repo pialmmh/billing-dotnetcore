@@ -60,7 +60,7 @@ public class SummaryOutboxWriterTests
             Call("8801712000000", when),
         }, store, Summary: SummaryMode.Outbox);
 
-        var result = CdrProcessor.Default().Process(batch);
+        var result = CdrPipeline.Default().Process(batch);
 
         Assert.Equal(2, result.Rated.Count);
         // cdr + chargeable writes still happen (same transaction).
@@ -80,7 +80,7 @@ public class SummaryOutboxWriterTests
         // default Summary = Inline
         var batch = new CdrBatch(Mediation(), RetailPartner5, new[] { Call("8801712345678", when) }, store);
 
-        CdrProcessor.Default().Process(batch);
+        CdrPipeline.Default().Process(batch);
 
         Assert.Equal(1, store.ExecutedSql.Count(s => s.StartsWith("insert into sum_voice_day_03")));
         Assert.DoesNotContain(store.ExecutedSql, s => s.StartsWith("insert into summary_affected"));
@@ -97,7 +97,7 @@ public class SummaryOutboxWriterTests
             Call("8801712000000", when),
         }, store, Summary: SummaryMode.Outbox);
 
-        CdrProcessor.Default().Process(batch);
+        CdrPipeline.Default().Process(batch);
 
         var outbox = store.ExecutedSql.Single(s => s.StartsWith("insert into summary_affected"));
         var decoded = SummaryOutboxWriter.Decode(ExtractBase64(outbox));
