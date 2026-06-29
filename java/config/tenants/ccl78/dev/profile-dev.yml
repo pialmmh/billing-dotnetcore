@@ -1,0 +1,66 @@
+# CCL — development profile for telcobright-billing-core.
+#
+# This mirrors routesphere's per-tenant/per-profile layout
+#   config/tenants/<tenant>/<profile>/profile-<profile>.yml
+# but carries only the BILLING side's concerns. routesphere's profile also inlines
+# the live-call channels (esl / sigtran / http / omniqueue / memledger); this service
+# runs none of those — it is config-manager-fed and only rates. So a billing profile
+# carries three things: where to fetch config from, how reloads are triggered, and
+# which mediation modules are on.
+#
+# SECRETS: there are intentionally NO passwords/tokens here (code-master secrets rule).
+# config-manager base-url and the Kafka bootstrap address are non-secret. If a profile
+# ever needs DB/SASL credentials, they come from the secret store (OpenBao), never YAML.
+
+billing:
+  tenant:
+    profiles:
+      dev:
+        name: "ccl78 dev"
+        active: true
+        environment: "development"
+
+  # Where this service pulls each tenant's DynamicContext (+ MediationContext) from.
+  # Same source routesphere uses; the DATA always travels over HTTP, never Kafka.
+  config-manager:
+    base-url: "http://103.95.96.78:7072"
+    tenant-root-endpoint: "/get-specific-tenant-root"     # POST ?name=<tenant>
+    global-registry-endpoint: "/get-global-tenant-registry"
+    timeout-seconds: 180
+
+  # Kafka config-change TRIGGER. An event only tells us "config changed, re-fetch";
+  # it never carries the config itself. Same mechanism + 3000 ms trailing debounce
+  # as routesphere's ConfigEventConsumer.
+  config-events:
+    enabled: true
+    bootstrap-servers: "103.95.96.78:9092"
+    event-topic-base: "config_event_loader"               # actual topic = <base>_<tenant>
+    consumer-group-base: "billing-core-config-reload"
+    debounce-ms: 3000
+    idle-fast-path-multiplier: 2                           # idle > 2x debounce => reload now
+
+  # Database for the post-call / batch write slice (FinalizeAndSummarize, ProcessCdrBatch): write the CDR +
+  # roll up summaries into each tenant/reseller schema. NOT used by the rating path (config-manager-fed).
+  # This project keeps the DB credentials INLINE here (no OpenBao). Fill username/password.
+  datasource:
+    host: "103.95.96.77"
+    port: 3306
+    admin-db: "telcobright"                               # admin/operator schema; resellers = res_NNN
+    reseller-db-prefix: "res_"
+    username: ""                                           # CCL dev DB user  — TODO: set
+    password: ""                                           # CCL dev DB password — TODO: set
+
+  # Mediation/rating module toggles (billing-core specific).
+  mediation:
+    voice-enabled: true
+    sms-enabled: false
+    reseller-fanout-enabled: false                        # admin-only first slice
+
+  # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Off = legacy inline summaries.
+  # When enabled, a cdr batch writes ONE compressed summary_affected row (atomic with the cdr write) and pings
+  # the summary-service, which consumes the outbox. bootstrap-servers = CCL Kafka (same host as config-events).
+  summary:
+    enabled: false                                        # flip true at cutover
+    entity-type: "cdr"
+    ping-topic: "cdr_summary_ping"
+    bootstrap-servers: "103.95.96.78:9092"                # CCL Kafka

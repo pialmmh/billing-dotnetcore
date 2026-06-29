@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      telcobright-billing-core — Java / Quarkus port.
+
+      A faithful clone of the .NET 8 billing-core (../src/Billing). Same folder/package structure,
+      same class + method names (kept verbatim, including the legacy lower-case model names cdr/ne/
+      partner/rateassign). ONE binary. The .proto is shared with the .NET service (identical wire
+      format); only the generated-code layout differs.
+
+        Grpc.AspNetCore   -> quarkus-grpc
+        Confluent.Kafka   -> quarkus-kafka-client (plain producer/consumer)
+        YamlDotNet        -> jackson-dataformat-yaml
+        MySqlConnector    -> mysql-connector-j (JDBC, manual tx via java.sql.Connection)
+        xunit             -> JUnit 5
+        Microsoft.Ext.DI  -> CDI (Quarkus Arc)
+        IHostedService    -> CDI @Startup / StartupEvent observers
+    -->
+
+    <groupId>com.telcobright</groupId>
+    <artifactId>billing-core</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+
+    <properties>
+        <compiler-plugin.version>3.13.0</compiler-plugin.version>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
+        <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
+        <quarkus.platform.version>3.24.1</quarkus.platform.version>
+        <skipITs>true</skipITs>
+        <surefire-plugin.version>3.5.0</surefire-plugin.version>
+        <mysql.connector.version>8.4.0</mysql.connector.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>${quarkus.platform.artifact-id}</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Api: gRPC host (server). Generates stubs from src/main/proto/billing.proto. -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-grpc</artifactId>
+        </dependency>
+
+        <!-- Beans + TenantConfigSync: plain Kafka producer (summary change-notification) + consumer (config events). -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-kafka-client</artifactId>
+        </dependency>
+
+        <!-- DI container (CDI / Arc). -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-arc</artifactId>
+        </dependency>
+
+        <!-- JSON (cdrs_json over gRPC, config-manager HTTP DTOs). -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-jackson</artifactId>
+        </dependency>
+
+        <!-- YAML (tenants.yml + profile-*.yml), version managed by the Quarkus/Jackson BOM. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
+
+        <!-- Data: live MySQL adapters (manual connection + transaction, like MySqlConnector). -->
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <version>${mysql.connector.version}</version>
+        </dependency>
+
+        <!-- Tests (JUnit 5). Pure-logic tests run as plain Jupiter tests; no Quarkus boot needed. -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>quarkus-maven-plugin</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <extensions>true</extensions>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>build</goal>
+                            <goal>generate-code</goal>
+                            <goal>generate-code-tests</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${compiler-plugin.version}</version>
+                <configuration>
+                    <compilerArgs>
+                        <arg>-parameters</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surefire-plugin.version}</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                        <maven.home>${maven.home}</maven.home>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

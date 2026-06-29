@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+option csharp_namespace = "Telcobright.Billing.V1";
+
+// Java port (Quarkus gRPC). Wire format is identical to the .NET service; only the
+// generated-code layout differs. Messages land as separate files in com.telcobright.billing.grpc.
+option java_package = "com.telcobright.billing.grpc";
+option java_multiple_files = true;
+option java_outer_classname = "BillingProto";
+
+package telcobright.billing.v1;
+
+// Rating + CDR + summary service. routesphere (the live call/SMS platform) calls this
+// over gRPC.
+//
+// Division of responsibility (the handoff):
+//   routesphere KEEPS : tenant identification, routing (where to send the call),
+//                       admission gating, mem-ledger reserve/debit, signaling, state.
+//   THIS SERVICE OWNS : service-group/family categorization, rating (first-unit + final),
+//                       CDR write, and summary generation (operator now; res_NNN later).
+service RatingService {
+  // BEFORE the call/SMS, during admission. routesphere sends ONLY the call facts (no levels,
+  // no balances); this service derives the tenant's ancestor chain (leaf->root) and returns a
+  // per-tier result map keyed by dbName. routesphere reserves the first FUNDED candidate of each
+  // tier in mem-ledger, compensating earlier tiers on any tier's failure.
+  rpc GetMaxRatePerMinute (MaxRateRequest) returns (MaxRateReply);
+
+  // AFTER the call/SMS. Runs full rating, writes the CDR, and rolls up summaries into the operator
+  // schema (and, later, each reseller res_NNN schema). Returns the final per-level settlement so
+  // routesphere can settle mem-ledger (debit final / refund rest).
+  rpc FinalizeAndSummarize (FinalizeRequest) returns (FinalizeResponse);
+
+  // BATCH CDR processing — the Kafka-fed path. routesphere (or a test client) sends a batch of fully
+  // mediated/decoded cdrs for ONE tenant; this runs the exact same pipeline the Kafka consumer will
+  // (CdrProcessor.Process via MySqlCdrBatchRunner) and writes cdr + acc_chargeable + summaries (+ cdrerror)
+  // to that tenant's schema in ONE transaction — all-or-nothing.
+  rpc ProcessCdrBatch (CdrBatchRequest) returns (CdrBatchResult);
+}
+
+enum ServiceType {
+  SERVICE_TYPE_UNSPECIFIED = 0;
+  VOICE = 1;
+  SMS   = 2;
+}
+
+enum AssignDirection {
+  ASSIGN_DIRECTION_UNSPECIFIED = 0;
+  CUSTOMER = 1;   // charge the InPartner side
+  SUPPLIER = 2;   // charge the OutPartner side
+}
+
+// ---- GetMaxRatePerMinute (admission) -------------------------------------------------
+
+// routesphere sends ONLY call facts -- no config, no balances, no chain.
+message MaxRateRequest {
+  string tenant            = 1;  // entry tenant dbName (leaf of the chain)
+  int32  partner_id        = 2;  // entry partner
+  string calling_number    = 3;
+  string called_number     = 4;
+  string source_ip         = 5;
+  ServiceType service_type = 6;
+  int64  start_epoch_millis= 7;
+  // One round trip rates the WHOLE chain: routesphere sends the per-tier payload (the partner that owns
+  // each tier, by depth: 0=admin/root ... leaf=deepest reseller), and the reply carries every tier. The
+  // service still derives the tenant chain from `tenant`; these supply the per-tier partner (+ packages).
+  // Empty => only the leaf (`partner_id`) is rated and ancestors fall back to partner 0 (legacy behaviour).
+  repeated Level levels    = 8;
+}
+
+// One ranked option for a tier. routesphere reserves the first FUNDED one.
+message RateCandidate {
+  int64  package_account_id     = 1;  // mem-ledger PackageAccount id (eligible, ranked by this service)
+  string uom                    = 2;  // TF_min | OTH_ea | BDT
+  double rate_per_minute        = 3;
+  double max_amount_first_minute= 4;  // package -> 1 unit; cash -> rate
+}
+
+// One resolved tier in the charge chain. db_name is globally unique (admin = operator DB,
+// resellers = res_NNN), so it is the map key; partner_id (unique only within a DB) rides here.
+message TierResult {
+  string db_name        = 1;
+  int32  partner_id     = 2;
+  int32  service_group  = 3;       // category this service detected at this tier
+  string reject_reason  = 4;       // non-empty => this tier rejects
+  repeated RateCandidate candidates = 5;
+}
+
+message MaxRateReply {
+  bool   ok            = 1;        // false if any required tier rejects
+  string reject_reason = 2;
+  map<string, TierResult> tiers = 3;   // key = db_name (admin / res_NNN)
+}
+
+// ---- FinalizeAndSummarize (post-call) ------------------------------------------------
+
+// Immutable facts of a call/SMS, known at admission time.
+message CallFacts {
+  string tenant            = 1;
+  ServiceType service_type = 2;
+  string caller_number     = 3;
+  string called_number     = 4;
+  string source_ip         = 5;
+  string sip_username      = 6;
+  string source_domain     = 7;
+  string incoming_route    = 8;
+  string outgoing_route    = 9;
+  int32  switch_id         = 10;
+  string session_id        = 11;
+  string sip_call_id       = 12;
+  bool   inbound           = 13;
+  int64  start_epoch_millis= 14;
+}
+
+// A resolved level in the charge chain. Depth 0 = operator/admin; 1..5 = resellers.
+message Level {
+  int32  depth              = 1;
+  int32  partner_id         = 2;
+  string partner_name       = 3;
+  int32  package_account_id = 4;
+  AssignDirection direction = 5;
+}
+
+message FinalizeRequest {
+  CallFacts facts        = 1;
+  repeated Level levels  = 2;
+  int64  answer_epoch_millis = 3;
+  int64  end_epoch_millis    = 4;
+  int32  billsec         = 5;     // answered/billable seconds
+  int32  ring_seconds    = 6;
+  bool   answered        = 7;
+  string hangup_cause    = 8;
+  string receiver_ip     = 9;
+  string read_codec      = 10;
+  double reserved_amount = 11;    // what routesphere reserved (for reconciliation)
+}
+
+// Per-level final settlement. routesphere applies charged_amount to mem-ledger.
+message LevelSettlement {
+  int32  depth            = 1;
+  int32  partner_id       = 2;
+  string uom              = 3;
+  double charged_amount   = 4;
+  double package_amount   = 5;    // billable minutes for package units (0 for BDT cash)
+  double in_partner_cost  = 6;    // cash cost for BDT (0 for package units)
+  string matched_prefix   = 7;
+  int32  service_group_id = 8;
+  int32  service_family_id= 9;
+}
+
+message FinalizeResponse {
+  bool   success           = 1;
+  string error             = 2;
+  string cdr_id            = 3;
+  bool   cdr_written       = 4;
+  bool   summary_written   = 5;
+  repeated LevelSettlement settlements = 6;
+  double total_charged     = 7;
+}
+
+// ---- ProcessCdrBatch (batch CDR processing, Kafka-fed) --------------------------------
+message CdrBatchRequest {
+  string tenant            = 1;   // tenant dbName to process into (its schema receives the writes)
+  repeated string cdrs_json = 2;  // each = a JSON-serialized cdr (the full MediationModel.cdr, 104 fields)
+}
+
+message CdrBatchResult {
+  bool   committed             = 1;   // true => the whole batch committed atomically
+  string error                 = 2;   // non-empty => rolled back / failed
+  int32  rated                 = 3;   // qualified cdrs (written to cdr)
+  int32  errored               = 4;   // rejected cdrs (written to cdrerror)
+  int32  cdrs_written          = 5;
+  int32  chargeables_written   = 6;
+  int32  cdr_errors_written    = 7;
+  double total_charged         = 8;
+}

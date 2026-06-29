@@ -1,0 +1,92 @@
+package com.telcobright.billing.beans;
+
+import com.telcobright.billing.data.MySqlCdrBatchRunner;
+import com.telcobright.billing.data.MySqlConnectionFactory;
+import com.telcobright.billing.mediation.cdr.CdrBatchResult;
+import com.telcobright.billing.mediation.cdr.SummaryMode;
+import com.telcobright.billing.mediation.engine.models.cdr;
+import com.telcobright.billing.mediation.sql.BatchSqlWriter;
+import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
+import com.telcobright.billing.tenantconfigsync.dependencies.SummaryOutboxOptions;
+import com.telcobright.billing.tenantconfigsync.model.Tenant;
+import io.quarkus.runtime.StartupEvent;
+import jakarta.enterprise.event.Observes;
+import jakarta.inject.Inject;
+import jakarta.inject.Singleton;
+import org.jboss.logging.Logger;
+
+import java.sql.Connection;
+import java.util.List;
+
+/**
+ * The CDR PROCESSOR — the service's main startup bean. It owns the cdr processing flow end to end:
+ * resolve a tenant's rating/mediation config from <b>config-manager</b> (the {@link ITenantRegistry} kept in
+ * sync underneath by the config-sync adapter), then mediate + write the batch in ONE transaction via
+ * {@link MySqlCdrBatchRunner}, and — in OUTBOX mode — notify the summary-service after commit.
+ *
+ * <p>It is the bean every entry point feeds: the gRPC {@code ProcessCdrBatch} RPC today, and a Kafka cdr
+ * ingest loop next (launched from the startup observer). The config-sync consumer and the summary notifier
+ * are dependencies it uses underneath — not beans themselves.
+ */
+@Singleton
+public class CdrProcessor {
+    private static final Logger log = Logger.getLogger(CdrProcessor.class);
+
+    private final ITenantRegistry tenants;            // config-manager view, kept in sync underneath
+    private final MySqlConnectionFactory connections;
+    private final MySqlCdrBatchRunner batchRunner;
+    private final SummaryOutboxOptions summary;
+    private final SummaryChangeNotificationPublisher summaryPublisher;
+
+    @Inject
+    public CdrProcessor(ITenantRegistry tenants, MySqlConnectionFactory connections,
+            MySqlCdrBatchRunner batchRunner, SummaryOutboxOptions summary,
+            SummaryChangeNotificationPublisher summaryPublisher) {
+        this.tenants = tenants;
+        this.connections = connections;
+        this.batchRunner = batchRunner;
+        this.summary = summary;
+        this.summaryPublisher = summaryPublisher;
+    }
+
+    /** Startup seam: this is where the Kafka cdr ingest loop will be launched (read a batch -> ProcessBatch).
+     * Not wired yet — the cdr topic + wire format are still to be defined, so today cdrs arrive via the gRPC
+     * entry. Kept here so the bean IS the startup component (mirrors the .NET IHostedService.StartAsync). */
+    void onStart(@Observes StartupEvent ev) {
+        log.info("CdrProcessor started (gRPC-fed; Kafka cdr ingest loop pending a defined contract)");
+    }
+
+    /**
+     * Process ONE tenant's cdr batch end to end: resolve the tenant's config from config-manager, then
+     * mediate + write (cdr + acc_chargeable + summaries-or-outbox) in one transaction; OUTBOX mode notifies
+     * the summary-service after commit. Never throws — a failure is returned as a non-committed result (the
+     * transaction itself has already rolled back).
+     */
+    public CdrProcessingResult ProcessBatch(String tenant, List<cdr> cdrs) {
+        Tenant resolved = tenants.FindByDbName(tenant);
+        if (resolved == null)
+            return CdrProcessingResult.Failed("unknown tenant '" + tenant + "'");
+        if (!connections.IsConfigured())
+            return CdrProcessingResult.Failed("datasource credentials not configured (set billing.datasource.username / password in profile-<env>.yml)");
+
+        try (Connection conn = connections.Open(tenant)) {
+            // OUTBOX mode writes the compressed batch to summary_affected (atomic with the cdr write) instead of
+            // rolling up summaries inline; INLINE (default) keeps the legacy in-transaction summary write.
+            SummaryMode mode = summary.Enabled ? SummaryMode.Outbox : SummaryMode.Inline;
+            CdrBatchResult r = batchRunner.Run(conn, resolved.Context.MediationContext, resolved.Context.Partners,
+                    cdrs, null, BatchSqlWriter.DefaultSegmentSize, mode);
+
+            // after the commit, nudge the summary-service (best-effort; it also polls the outbox).
+            if (summary.Enabled)
+                summaryPublisher.Publish(tenant, summary.EntityType, r.Rated().size());
+
+            log.infof("CdrProcessor tenant=%s cdrs=%d rated=%d errored=%d charged=%s mode=%s",
+                    tenant, cdrs.size(), r.Rated().size(), r.Errored().size(), r.TotalCharged(), mode);
+
+            return CdrProcessingResult.Ok(r);
+        } catch (Exception ex) {
+            log.error("CdrProcessor tenant=" + tenant + " rolled back", ex);
+            return CdrProcessingResult.Failed(ex.getMessage());
+        }
+    }
+}

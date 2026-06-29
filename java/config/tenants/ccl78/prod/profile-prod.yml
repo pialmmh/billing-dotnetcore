@@ -1,0 +1,46 @@
+# CCL — production profile for telcobright-billing-core.
+# Same shape as profile-dev.yml; prod points at the HA config-manager + Kafka cluster
+# and turns the config-event trigger on. Secrets (if any) come from OpenBao, not here.
+
+billing:
+  tenant:
+    profiles:
+      prod:
+        name: "ccl78 prod"
+        active: true
+        environment: "production"
+
+  config-manager:
+    base-url: "http://10.9.9.2:7072"
+    tenant-root-endpoint: "/get-specific-tenant-root"
+    global-registry-endpoint: "/get-global-tenant-registry"
+    timeout-seconds: 180
+
+  config-events:
+    enabled: true
+    bootstrap-servers: "10.10.199.20:9092,10.10.198.20:9092,10.10.197.20:9092"
+    event-topic-base: "config_event_loader"
+    consumer-group-base: "billing-core-config-reload"
+    debounce-ms: 3000
+    idle-fast-path-multiplier: 2
+
+  # DB for the post-call / batch write slice. Credentials INLINE here for this project (no OpenBao).
+  datasource:
+    host: "103.95.96.77"
+    port: 3306
+    admin-db: "telcobright"
+    reseller-db-prefix: "res_"
+    username: ""                                           # CCL prod DB user — TODO: set
+    password: ""                                           # CCL prod DB password — TODO: set
+
+  mediation:
+    voice-enabled: true
+    sms-enabled: false
+    reseller-fanout-enabled: false
+
+  # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Off = legacy inline summaries.
+  summary:
+    enabled: false                                        # flip true at cutover
+    entity-type: "cdr"
+    ping-topic: "cdr_summary_ping"
+    bootstrap-servers: "10.10.199.20:9092,10.10.198.20:9092,10.10.197.20:9092"   # prod Kafka (same as config-events)
