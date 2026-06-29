@@ -3,8 +3,8 @@ package com.telcobright.billing.tenantconfigsync.model;
 import com.telcobright.billing.mediation.context.MediationContext;
 import com.telcobright.billing.mediation.model.PackageAccount;
 import com.telcobright.billing.mediation.model.Partner;
+import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.model.Rate;
-import com.telcobright.billing.mediation.model.RateAssign;
 import com.telcobright.billing.mediation.model.RatePlan;
 
 import java.util.HashMap;
@@ -37,9 +37,9 @@ public final class DynamicContext {
     /** plan id → (prefix/zone → rate). Mirrors routesphere ratePlanWiseTodaysRates. */
     public Map<Integer, Map<String, Rate>> RatePlanWiseTodaysRates = new HashMap<>();
 
-    public List<RateAssign> RateAssignsCustomer = List.of();
+    public List<rateassign> RateAssignsCustomer = List.of();
 
-    public List<RateAssign> RateAssignsSupplier = List.of();
+    public List<rateassign> RateAssignsSupplier = List.of();
 
     /** partner id → package accounts, ranked (ACTIVE, by onSelectPriority). Eligibility only. */
     public Map<Long, List<PackageAccount>> PartnerIdWisePackageAccounts = new HashMap<>();

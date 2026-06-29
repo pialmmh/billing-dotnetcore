@@ -5,7 +5,9 @@ import com.telcobright.billing.mediation.context.RatingRule;
 import com.telcobright.billing.mediation.context.Rule;
 import com.telcobright.billing.mediation.context.ServiceGroupConfiguration;
 import com.telcobright.billing.mediation.engine.models.cdr;
+import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.engine.models.rateplanassignmenttuple;
+import com.telcobright.billing.mediation.model.AssignmentDirection;
 import com.telcobright.billing.mediation.validation.IValidationRule;
 import com.telcobright.billing.mediation.validation.ValidationRuleRegistry;
 import com.telcobright.billing.tenantconfigsync.internal.dto.DynamicContextDto;
@@ -16,6 +18,7 @@ import com.telcobright.billing.tenantconfigsync.internal.dto.TenantDto;
 import com.telcobright.billing.tenantconfigsync.model.DynamicContext;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,30 +62,53 @@ final class ConfigManagerMapper {
         ctx.PartnerIdWisePackageAccounts = dto.PartnerIdWisePackageAccounts != null
             ? new HashMap<>(dto.PartnerIdWisePackageAccounts)
             : new HashMap<>();
-        ctx.MediationContext = ToMediation(dto.MediationContext);
+        ctx.MediationContext = ToMediation(dto.MediationContext, ctx.RateAssignsCustomer, ctx.RateAssignsSupplier);
         return ctx;
     }
 
-    private static MediationContext ToMediation(MediationContextDto dto) {
-        if (dto == null) {
-            return MediationContext.Empty;
-        }
-        // The resolver (which tuples apply) and the per-day RateCache (their rates) are both derived from the
-        // tenant's verbatim legacy rateplanassignmenttuples (each carrying its rateassigns); the legacy
-        // PrefixMatcher longest-prefixes over the RateCache at charge time. The SG configs + checklists carry
-        // rating-rule DATA and validation-rule REFERENCES — the references are bound to behaviour here.
-        Map<Integer, ServiceGroupConfiguration> sgConfigs = dto.ServiceGroupConfigurations == null
+    private static MediationContext ToMediation(MediationContextDto dto,
+            List<rateassign> customerRates, List<rateassign> supplierRates) {
+        Map<Integer, ServiceGroupConfiguration> sgConfigs = (dto == null || dto.ServiceGroupConfigurations == null)
             ? null
             : dto.ServiceGroupConfigurations.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> ToSgConfig(e.getValue())));
-        List<rateplanassignmenttuple> tuples =
-            dto.RatePlanAssignmentTuples != null ? dto.RatePlanAssignmentTuples : List.of();
+
+        // The resolver (which plan applies) + the per-day RateCache (the rates) are derived from this tenant's
+        // rate-plan-assignment tuples; the legacy PrefixMatcher longest-prefixes over the RateCache at charge
+        // time. Prefer the legacy tuples when config-manager serves them; otherwise wrap the tenant's flat
+        // customer/supplier rateassigns (the reseller model: ONE plan per tier, served on DynamicContext as
+        // rateAssignsCustomer/Supplier) as DEFAULT tuples so the resolver returns them for any partner — the
+        // same A2ZRater path, just fed from the DynamicContext instead of per-partner tuples.
+        List<rateplanassignmenttuple> tuples = new ArrayList<>();
+        if (dto != null && dto.RatePlanAssignmentTuples != null)
+            tuples.addAll(dto.RatePlanAssignmentTuples);
+        if (tuples.isEmpty()) {
+            if (customerRates != null && !customerRates.isEmpty())
+                tuples.add(DefaultTuple(-1, AssignmentDirection.Customer.value, customerRates));
+            if (supplierRates != null && !supplierRates.isEmpty())
+                tuples.add(DefaultTuple(-2, AssignmentDirection.Supplier.value, supplierRates));
+        }
+
         return MediationContext.ForRating(
             tuples,
-            dto.Categories,
-            dto.ServiceGroupRules,
+            dto != null ? dto.Categories : null,
+            dto != null ? dto.ServiceGroupRules : null,
             sgConfigs,                            // null → the built-in default SG configs
-            ToChecklist(dto.CommonChecklist));
+            dto != null ? ToChecklist(dto.CommonChecklist) : null);
+    }
+
+    // The tenant's single rate plan for a direction with no partner/route — RatePlanResolver returns it as
+    // that direction's default (reseller model). Its rateassigns carry the dial-prefix rows the legacy rates on.
+    private static rateplanassignmenttuple DefaultTuple(int id, int direction, List<rateassign> rates) {
+        rateplanassignmenttuple t = new rateplanassignmenttuple();
+        t.id = id;
+        t.idService = 0;
+        t.AssignDirection = direction;
+        t.idpartner = null;
+        t.route = null;
+        t.priority = 0;
+        t.rateassigns = rates;
+        return t;
     }
 
     private static ServiceGroupConfiguration ToSgConfig(ServiceGroupConfigDto dto) {

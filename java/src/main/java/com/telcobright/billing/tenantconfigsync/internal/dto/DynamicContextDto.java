@@ -2,8 +2,8 @@ package com.telcobright.billing.tenantconfigsync.internal.dto;
 
 import com.telcobright.billing.mediation.model.PackageAccount;
 import com.telcobright.billing.mediation.model.Partner;
+import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.model.Rate;
-import com.telcobright.billing.mediation.model.RateAssign;
 import com.telcobright.billing.mediation.model.RatePlan;
 
 import java.util.List;
@@ -13,8 +13,8 @@ public final class DynamicContextDto {
     public Map<Integer, Partner> Partners;
     public Map<Integer, RatePlan> RatePlans;
     public Map<Integer, Map<String, Rate>> RatePlanWiseTodaysRates;
-    public List<RateAssign> RateAssignsCustomer;
-    public List<RateAssign> RateAssignsSupplier;
+    public List<rateassign> RateAssignsCustomer;
+    public List<rateassign> RateAssignsSupplier;
     public Map<Long, List<PackageAccount>> PartnerIdWisePackageAccounts;
 
     /**

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.telcobright.billing.tenantconfigsync.dependencies.TenantConfigSyncOptions;
 import com.telcobright.billing.tenantconfigsync.internal.dto.TenantDto;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
@@ -43,6 +44,7 @@ public final class HttpConfigManagerClient implements IConfigManagerClient {
     private static final ObjectMapper Json = JsonMapper.builder()
         .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES)
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+        .addModule(new JavaTimeModule())   // rateassign rows (rateAssignsCustomer/Supplier) carry start/end dates
         .build();
 
     private final HttpClient _http;
