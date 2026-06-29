@@ -20,7 +20,6 @@ import com.telcobright.billing.tenantconfigsync.spi.IConfigManagerClient;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Singleton;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.net.http.HttpClient;
 
@@ -32,37 +31,36 @@ import java.net.http.HttpClient;
  * (CdrProcessor, SummaryChangeNotificationPublisher), and the handlers are discovered automatically as beans.
  *
  * <p>Secrets (DB user/password) come 100% from the profile YAML inline (this project's convention — not
- * OpenBao, not env). The config directory mirrors the .NET ContentRootPath/config convention.
+ * OpenBao, not env). The tenant registry (enable/disable + active profile) is read from
+ * application.properties (routesphere convention); the per-profile YAML detail from the classpath
+ * config tree under src/main/resources/config.
  */
 @ApplicationScoped
 public class BillingConfig {
 
-    @ConfigProperty(name = "billing.config.dir", defaultValue = "config")
-    String configDir;
-
-    // --- Tenant config (read from the profile YAML on first injection) ----------------------------
+    // --- Tenant config: registry from application.properties, per-profile detail from the classpath ---
     @Produces
     @Singleton
     public TenantSelection tenantSelection() {
-        return ProfileConfigReader.ReadSelection(configDir);
+        return ProfileConfigReader.ReadSelection();
     }
 
     @Produces
     @Singleton
     public TenantConfigSyncOptions tenantConfigSyncOptions(TenantSelection selection) {
-        return ProfileConfigReader.ReadOptions(configDir, selection);
+        return ProfileConfigReader.ReadOptions(selection);
     }
 
     @Produces
     @Singleton
     public DatasourceOptions datasourceOptions(TenantSelection selection) {
-        return ProfileConfigReader.ReadDatasource(configDir, selection);
+        return ProfileConfigReader.ReadDatasource(selection);
     }
 
     @Produces
     @Singleton
     public SummaryOutboxOptions summaryOutboxOptions(TenantSelection selection) {
-        return ProfileConfigReader.ReadSummary(configDir, selection);
+        return ProfileConfigReader.ReadSummary(selection);
     }
 
     // --- Tenant registry + the config-sync machinery ----------------------------------------------

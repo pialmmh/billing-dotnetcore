@@ -36,7 +36,11 @@ mvn -f java/pom.xml test                 # tests only (MySQL integration tests s
 mvn -f java/pom.xml quarkus:dev          # dev mode (boots vs live config-manager; gRPC on :9000)
 java -jar java/target/quarkus-app/quarkus-run.jar
 ```
-- gRPC server: `:9000` (h2c, separate server). Config tree read from `./config` (`billing.config.dir`).
+- gRPC server: `:9000` (h2c, separate server).
+- Tenant config (routesphere convention): registry (enable/disable + active profile) in
+  `application.properties` (`billing.tenants[i].*`); per-profile YAML in
+  `src/main/resources/config/tenants/<t>/<p>/profile-<p>.yml` (classpath), overridable by an external
+  dir via `billing.config.dir`.
 - Local MySQL for integration tests: `127.0.0.1:3306` (lxc), `root`/`123456`.
 
 ## Faithful-port notes (where C# semantics needed a Java shape)
