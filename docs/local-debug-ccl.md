@@ -1,8 +1,12 @@
-# Debug billing-core against the real CCL backend (config-manager + Kafka + DB)
+# Debug billing-core (Java/Quarkus) against the real CCL backend (config-manager + Kafka + DB)
 
-Run billing-core locally (your dev box / a new device) wired to the **real CCL backend** — config-manager,
-Kafka, and DB. There is **no local-database fallback by design**: if a CCL endpoint is unreachable, bring up
-connectivity (the CCL VPN / route to the CCL subnet) — do not substitute a local database.
+Run the **Java/Quarkus** billing-core locally (your dev box / a new device) wired to the **real CCL backend** —
+config-manager, Kafka, and DB — and attach a debugger. There is **no local-database fallback by design**: if a
+CCL endpoint is unreachable, bring up connectivity (the CCL VPN / route to the CCL subnet) — do not substitute a
+local database.
+
+> This is the canonical version. The Java port lives under **`java/`** in the repo; the legacy .NET version
+> (`src/Billing/`) is being retired. All paths below are the Java ones.
 
 ## Endpoints — all CCL, all must be reachable
 | Service | Address | Reachable from open internet? |
@@ -16,71 +20,119 @@ The summary-service is wired to these **same** endpoints.
 ## 0. Confirm CCL reachability first
 ```bash
 probe() { timeout 6 bash -c "echo > /dev/tcp/$1/$2" 2>/dev/null && echo "$1:$2 OPEN" || echo "$1:$2 UNREACHABLE"; }
-probe 103.95.96.78 7072   # config-manager → OPEN
+probe 103.95.96.78 7072   # config-manager → OPEN  (service fail-fasts on startup if this is down)
 probe 103.95.96.78 9092   # CCL Kafka       → OPEN
 probe 103.95.96.77 3306   # CCL DB          → must be OPEN to run the write path
 ```
 If the DB is UNREACHABLE, bring up the **CCL VPN / route to `103.95.96.77`**. Do not point at a local database.
 
 ## Prerequisites (new device)
-- **.NET 8 SDK** (`dotnet --version` → 8.x).
+- **JDK 21** (`java -version` → 21.x) and **Maven** (`mvn -version`). The repo uses Java 21 / Quarkus 3.24.
 - **CCL connectivity**: egress to `103.95.96.78` (config-manager + Kafka) AND the VPN/route to `103.95.96.77` (DB).
 - **git** access to `git@github.com:pialmmh/billing-dotnetcore.git`.
 - `grpcurl` or Postman (gRPC) to drive the service.
+- An IDE that can attach a remote JVM debugger: **IntelliJ IDEA** (has a Quarkus run/debug; or plain Remote JVM
+  attach) or **VS Code** (Java + "Debugger for Java").
 
 ## 1. Clone + build
 ```bash
 git clone git@github.com:pialmmh/billing-dotnetcore.git
 cd billing-dotnetcore
-dotnet build                 # expect: Build succeeded, 0 errors
+mvn -f java/pom.xml clean package            # expect: BUILD SUCCESS, 104 tests pass
+# faster inner loop once it's green: add -DskipTests
 ```
 
-## 2. Config — already points at CCL; just fill the DB creds
-`src/Billing/config/tenants/ccl78/dev/profile-dev.yml` already targets CCL:
-- `config-manager.base-url: http://103.95.96.78:7072`
-- `config-events.bootstrap-servers: 103.95.96.78:9092`
-- `datasource.host: 103.95.96.77`
+## 2. Config — routesphere style; already points at CCL, just fill the DB creds
+Two parts (see `java/src/main/resources/config/README.md`):
 
-Fill `datasource.username` / `datasource.password` (currently empty TODO) with the CCL DB credentials. The
-profile is the single source of truth — no environment overrides.
+1. **Tenant registry** — `java/src/main/resources/application.properties` (which tenants load + active profile):
+   ```properties
+   billing.tenants[0].name=ccl78
+   billing.tenants[0].enabled=true
+   billing.tenants[0].profile=dev
+   ```
+2. **Active profile detail** — `java/src/main/resources/config/tenants/ccl78/dev/profile-dev.yml`, already CCL:
+   - `config-manager.base-url: http://103.95.96.78:7072`
+   - `config-events.bootstrap-servers: 103.95.96.78:9092`
+   - `datasource.host: 103.95.96.77`
 
-## 3. Run
+Fill `datasource.username` / `datasource.password` (currently empty TODO) with the CCL DB credentials. The profile
+is the single source of truth — no environment overrides. (To point at an external, already-edited config dir
+without rebuilding, set `billing.config.dir=/path/to/config`; otherwise the bundled classpath tree is used.)
+
+## 3. Run in dev mode (live reload + debugger ready)
 ```bash
-cd src/Billing
-dotnet run
+mvn -f java/pom.xml quarkus:dev
 ```
-It loads each tenant's config from **CCL config-manager**, subscribes to **CCL Kafka** config-event topics, and
-writes to the **CCL DB**. Note the Kestrel URL in the log (dev default `http://localhost:5293`).
+Quarkus dev mode:
+- **Opens a JDWP debug port on `localhost:5005` automatically** (attach your IDE — see §4).
+- Hot-reloads code on save (no restart for most edits).
+- Starts the **gRPC server on `:9000`** (plaintext h2c, a dedicated server — set in `application.properties`).
+- **Fail-fast**: on boot it loads every enabled tenant from **CCL config-manager**; if config-manager is
+  unreachable the boot fails (by design — bring up connectivity). It then subscribes to **CCL Kafka**
+  config-event topics and writes to the **CCL DB**.
 - A `Kafka consume error … topic doesn't exist; retrying` warning is **normal** — the
   `config_event_loader_<tenant>` topic exists only once config-manager publishes a change.
 
-## 4. Drive + debug the gRPC API
-Proto: `src/Billing/Protos/billing.proto`. Entry points:
+## 4. Attach the debugger + set breakpoints  ← the point of this doc
+Quarkus `quarkus:dev` already runs the app with JDWP listening on **`localhost:5005`**. Attach to it:
+
+- **IntelliJ IDEA**: open the `java/` folder as a Maven project → Run → **Edit Configurations → + → Remote JVM
+  Debug** → host `localhost`, port `5005` → Debug. (Or use IntelliJ's built-in Quarkus run config and hit Debug.)
+- **VS Code**: open `java/`, install "Extension Pack for Java", add a launch config of type `java` /
+  request `attach` → `hostName: localhost`, `port: 5005` → F5.
+
+To make the app **pause until** the debugger attaches (useful for catching startup):
+```bash
+mvn -f java/pom.xml quarkus:dev -Dsuspend=true        # waits on :5005 before booting
+```
+Change/disable the port with `-Ddebug=<port>` / `-Ddebug=false`.
+
+Good breakpoint spots:
+| Concern | Class |
+|---|---|
+| gRPC entry | `api/BillingServiceImpl`, `api/internal/ProcessCdrBatchHandler` |
+| batch + tenant resolve | `beans/CdrProcessor` |
+| rating | `mediation/rating/BasicCharge`, `mediation/cdr/CdrPipeline` |
+| outbox encode | `mediation/cdr/SummaryOutboxWriter` |
+| config load | `tenantconfigsync/internal/TenantHierarchyLoader`, `BillingBootstrap` |
+
+More logs: add to `application.properties` (or pass `-D…` on the command line):
+```properties
+quarkus.log.category."com.telcobright.billing".level=DEBUG
+```
+
+**Debug the packaged jar instead of dev mode** (e.g. to mimic prod):
+```bash
+java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 \
+     -jar java/target/quarkus-app/quarkus-run.jar
+```
+
+## 5. Drive the gRPC API
+Proto: `java/src/main/proto/billing.proto`. Entry points:
 - `ProcessCdrBatch { tenant, repeated cdrs_json }` — cdr → rate → validate → write.
 - `GetMaxRatePerMinute`, `FinalizeAndSummarize`.
 ```bash
 grpcurl -plaintext -d '{"tenant":"res_233","cdrs_json":["{ ...one cdr json... }"]}' \
-  localhost:5293 telcobright.billing.v1.RatingService/ProcessCdrBatch
+  localhost:9000 telcobright.billing.v1.RatingService/ProcessCdrBatch
 ```
-Postman: New → gRPC → `localhost:5293`, import `billing.proto`, pick `ProcessCdrBatch`. Full payload walkthrough:
-`docs/postman-e2e-testing.md`.
+Postman: New → gRPC → `localhost:9000`, import `billing.proto`, pick `ProcessCdrBatch`. The full payload
+walkthrough in `docs/postman-e2e-testing.md` still applies field-for-field (same proto, same wire format) — just
+target **`localhost:9000`** instead of the old .NET `:5293`.
 
-**Breakpoints:** Rider / Visual Studio (set `Billing` as startup) or VS Code (C# Dev Kit); break in
-`BillingServiceImpl` / `CdrProcessor` / `SummaryOutboxWriter`. For more logs raise `Logging:LogLevel:Default` in
-`appsettings.json`.
-
-## 5. Outbox / summary debug (the decoupled path)
+## 6. Outbox / summary debug (the decoupled path)
 Everything is config — there are no environment switches.
-1. Apply the outbox table into the CCL tenant schema(s): `src/Billing/Data/Sql/summary_outbox.sql` (creates `summary_affected`).
-2. In `profile-dev.yml` set `billing.summary.enabled: true` (default `false` = legacy inline). The `summary` block
-   already carries `ping-topic: cdr_summary_ping` and `bootstrap-servers` = CCL Kafka.
-3. `cd src/Billing && dotnet run`.
+1. Apply the outbox table into the CCL tenant schema(s): `java/src/main/resources/sql/summary_outbox.sql`
+   (creates `summary_affected`).
+2. In `profile-dev.yml` set `billing.summary.enabled: true` (default `false` = legacy inline). The `summary`
+   block already carries `ping-topic: cdr_summary_ping` and `bootstrap-servers` = CCL Kafka.
+3. `mvn -f java/pom.xml quarkus:dev`.
 
 Call `ProcessCdrBatch` → observe a row in `summary_affected` (CCL DB) and a message on `cdr_summary_ping` (CCL
 Kafka); the summary-service consumes it. Inspect the blob: `SELECT data FROM summary_affected\G` → base64-decode
 → gunzip → JSON.
 
 ## If a CCL endpoint is unreachable
-This is expected without connectivity. Bring up the **VPN / route to the CCL subnet** (especially
-`103.95.96.77`) and fill the DB creds in `profile-dev.yml`. **Do NOT substitute a local database** — the point
-is to debug against the real CCL backend.
+This is expected without connectivity. Bring up the **VPN / route to the CCL subnet** (especially `103.95.96.77`)
+and fill the DB creds in `profile-dev.yml`. **Do NOT substitute a local database** — the point is to debug against
+the real CCL backend.
