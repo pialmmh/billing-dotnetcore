@@ -53,8 +53,9 @@ class CdrPipelineTests {
 
     // SG10 customer rating config: per-minute 1.0 for prefix 1712 (partner 5).
     private static MediationContext Mediation() {
-        return MediationContext.ForRating(List.of(
-                TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7))));
+        var f = TestData.fixture();
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        return f.mediation();
     }
 
     private static final Map<Integer, Partner> RetailPartner5 = Map.of(5, new Partner(5, null, 3));
@@ -155,9 +156,9 @@ class CdrPipelineTests {
         Map<Integer, ServiceGroupConfiguration> configs = Map.of(
                 10, new ServiceGroupConfiguration(base.ServiceGroupId(), base.Disabled(), base.Rules(),
                         List.<IValidationRule<cdr>>of(new RequireCallingNumber()), base.UnansweredChecklist()));
-        var med = MediationContext.ForRating(List.of(
-                TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7))),
-                null, null, configs, null);
+        var medFixture = TestData.fixture();
+        medFixture.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        var med = medFixture.mediation(null, null, configs, null);
 
         var when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);
         var answeredOk = Call("8801712345678", when); answeredOk.OriginatingCallingNumber = "8801999000111";

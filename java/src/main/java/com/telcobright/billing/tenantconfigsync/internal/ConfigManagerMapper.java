@@ -5,9 +5,12 @@ import com.telcobright.billing.mediation.context.RatingRule;
 import com.telcobright.billing.mediation.context.Rule;
 import com.telcobright.billing.mediation.context.ServiceGroupConfiguration;
 import com.telcobright.billing.mediation.engine.models.cdr;
-import com.telcobright.billing.mediation.engine.models.rateassign;
+import com.telcobright.billing.mediation.engine.models.enumbillingspan;
+import com.telcobright.billing.mediation.engine.models.rate;
+import com.telcobright.billing.mediation.engine.models.rateplan;
 import com.telcobright.billing.mediation.engine.models.rateplanassignmenttuple;
-import com.telcobright.billing.mediation.model.AssignmentDirection;
+import com.telcobright.billing.mediation.model.Rate;
+import com.telcobright.billing.mediation.model.RatePlan;
 import com.telcobright.billing.mediation.validation.IValidationRule;
 import com.telcobright.billing.mediation.validation.ValidationRuleRegistry;
 import com.telcobright.billing.tenantconfigsync.internal.dto.DynamicContextDto;
@@ -18,6 +21,7 @@ import com.telcobright.billing.tenantconfigsync.internal.dto.TenantDto;
 import com.telcobright.billing.tenantconfigsync.model.DynamicContext;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -30,6 +34,8 @@ import java.util.stream.Collectors;
  * chains) are added afterwards by {@link TenantTreeBuilder}.
  */
 final class ConfigManagerMapper {
+
+    private static final LocalDateTime MinDate = LocalDateTime.of(1, 1, 1, 0, 0); // C# DateTime.MinValue
 
     private ConfigManagerMapper() {
     }
@@ -62,53 +68,136 @@ final class ConfigManagerMapper {
         ctx.PartnerIdWisePackageAccounts = dto.PartnerIdWisePackageAccounts != null
             ? new HashMap<>(dto.PartnerIdWisePackageAccounts)
             : new HashMap<>();
-        ctx.MediationContext = ToMediation(dto.MediationContext, ctx.RateAssignsCustomer, ctx.RateAssignsSupplier);
+        ctx.MediationContext = ToMediation(dto.MediationContext, ctx.RatePlans, ctx.RatePlanWiseTodaysRates);
         return ctx;
     }
 
     private static MediationContext ToMediation(MediationContextDto dto,
-            List<rateassign> customerRates, List<rateassign> supplierRates) {
+            Map<Integer, RatePlan> ratePlans,
+            Map<Integer, Map<String, Rate>> ratePlanWiseTodaysRates) {
         Map<Integer, ServiceGroupConfiguration> sgConfigs = (dto == null || dto.ServiceGroupConfigurations == null)
             ? null
             : dto.ServiceGroupConfigurations.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> ToSgConfig(e.getValue())));
 
-        // The resolver (which plan applies) + the per-day RateCache (the rates) are derived from this tenant's
-        // rate-plan-assignment tuples; the legacy PrefixMatcher longest-prefixes over the RateCache at charge
-        // time. Prefer the legacy tuples when config-manager serves them; otherwise wrap the tenant's flat
-        // customer/supplier rateassigns (the reseller model: ONE plan per tier, served on DynamicContext as
-        // rateAssignsCustomer/Supplier) as DEFAULT tuples so the resolver returns them for any partner — the
-        // same A2ZRater path, just fed from the DynamicContext instead of per-partner tuples.
-        List<rateplanassignmenttuple> tuples = new ArrayList<>();
-        if (dto != null && dto.RatePlanAssignmentTuples != null)
-            tuples.addAll(dto.RatePlanAssignmentTuples);
-        if (tuples.isEmpty()) {
-            if (customerRates != null && !customerRates.isEmpty())
-                tuples.add(DefaultTuple(-1, AssignmentDirection.Customer.value, customerRates));
-            if (supplierRates != null && !supplierRates.isEmpty())
-                tuples.add(DefaultTuple(-2, AssignmentDirection.Supplier.value, supplierRates));
-        }
+        // The legacy JOIN, fed from config: the resolver (which plan applies) + the per-day RateCache (the
+        // rates) are both built from this tenant's rate-plan-assignment tuples (each carrying its rateassign
+        // JOIN rows). The RateCache loader joins tuple -> rateassign(Inactive=idRatePlan) -> rate plan -> the
+        // actual rate rows, which arrive separately on the DynamicContext as ratePlanWiseTodaysRates.
+        List<rateplanassignmenttuple> tuples = (dto != null && dto.RatePlanAssignmentTuples != null)
+            ? dto.RatePlanAssignmentTuples : List.of();
+
+        Map<String, rateplan> dicRatePlan = ToDicRatePlan(ratePlans);
+        Map<Integer, List<rate>> rateRowsByRatePlan = ToRateRowsByRatePlan(ratePlanWiseTodaysRates);
+        Map<String, enumbillingspan> billingSpans = ResolveBillingSpans(dto);
 
         return MediationContext.ForRating(
             tuples,
+            rateRowsByRatePlan,
+            dicRatePlan,
+            billingSpans,
+            8,                                    // CdrSetting.MaxDecimalPrecision default
             dto != null ? dto.Categories : null,
             dto != null ? dto.ServiceGroupRules : null,
-            sgConfigs,                            // null → the built-in default SG configs
+            sgConfigs,                            // null -> the built-in default SG configs
             dto != null ? ToChecklist(dto.CommonChecklist) : null);
     }
 
-    // The tenant's single rate plan for a direction with no partner/route — RatePlanResolver returns it as
-    // that direction's default (reseller model). Its rateassigns carry the dial-prefix rows the legacy rates on.
-    private static rateplanassignmenttuple DefaultTuple(int id, int direction, List<rateassign> rates) {
-        rateplanassignmenttuple t = new rateplanassignmenttuple();
-        t.id = id;
-        t.idService = 0;
-        t.AssignDirection = direction;
-        t.idpartner = null;
-        t.route = null;
-        t.priority = 0;
-        t.rateassigns = rates;
-        return t;
+    // ratePlans -> DicRatePlan (idrateplan as string -> engine rateplan). The served RatePlan now carries
+    // techPrefix (field4), the BillingSpan uom and RateAmountRoundupDecimal, so use the served values; fall back
+    // ONLY when a value is absent: field4 -> "" (no tech prefix), BillingSpan -> the per-minute uom (TF_min).
+    private static Map<String, rateplan> ToDicRatePlan(Map<Integer, RatePlan> ratePlans) {
+        Map<String, rateplan> dic = new HashMap<>();
+        if (ratePlans == null) return dic;
+        for (var e : ratePlans.entrySet()) {
+            RatePlan plan = e.getValue();
+            rateplan rp = new rateplan();
+            rp.id = e.getKey();
+            rp.RatePlanName = plan != null ? plan.Name : "";
+            rp.field4 = (plan != null && plan.Field4 != null) ? plan.Field4 : "";
+            rp.BillingSpan = (plan != null && plan.BillingSpan != null) ? plan.BillingSpan : "TF_min";
+            rp.RateAmountRoundupDecimal = plan != null ? plan.RateAmountRoundupDecimal : null;
+            dic.put(Integer.toString(e.getKey()), rp);
+        }
+        return dic;
+    }
+
+    // ratePlanWiseTodaysRates (planId -> prefix -> served Rate) -> rateRowsByRatePlan (planId -> engine rate
+    // rows), via ToEngineRate which now maps the FULL served row.
+    private static Map<Integer, List<rate>> ToRateRowsByRatePlan(Map<Integer, Map<String, Rate>> served) {
+        Map<Integer, List<rate>> out = new HashMap<>();
+        if (served == null) return out;
+        for (var planEntry : served.entrySet()) {
+            List<rate> rows = new ArrayList<>();
+            if (planEntry.getValue() != null)
+                for (var r : planEntry.getValue().values())
+                    rows.add(ToEngineRate(r));
+            out.put(planEntry.getKey(), rows);
+        }
+        return out;
+    }
+
+    // Map the FULL served rate row into the engine rate. Use the served values; fall back ONLY when the served
+    // value is null: startdate -> MinDate (today's-rates are valid); enddate stays null = open; Category/SubCategory
+    // -> 1 (voice). billingspan / RateAmountRoundupDecimal / OtherAmount1..10 are taken verbatim from the served row.
+    private static rate ToEngineRate(Rate s) {
+        rate r = new rate();
+        r.id = s.Id;
+        r.Prefix = s.Prefix;
+        r.idrateplan = s.IdRatePlan;
+        r.rateamount = s.RateAmount;
+        r.CountryCode = s.CountryCode;
+        r.Category = (byte) (s.Category != null ? s.Category : 1);
+        r.SubCategory = (byte) (s.SubCategory != null ? s.SubCategory : 1);
+        r.Resolution = s.Resolution != null ? s.Resolution : 0;
+        r.MinDurationSec = s.MinDurationSec != null ? s.MinDurationSec.floatValue() : 0f;
+        r.SurchargeTime = s.SurchargeTime != null ? s.SurchargeTime : 0;
+        r.SurchargeAmount = s.SurchargeAmount;
+        r.Inactive = s.Inactive != null ? s.Inactive : 0;
+        r.startdate = s.StartDate != null ? s.StartDate : MinDate;
+        r.enddate = s.EndDate;
+        r.billingspan = s.BillingSpan;
+        r.RateAmountRoundupDecimal = s.RateAmountRoundupDecimal;
+        r.OtherAmount1 = s.OtherAmount1;
+        r.OtherAmount2 = s.OtherAmount2;
+        r.OtherAmount3 = s.OtherAmount3;
+        r.OtherAmount4 = s.OtherAmount4;
+        r.OtherAmount5 = s.OtherAmount5;
+        r.OtherAmount6 = s.OtherAmount6;
+        r.OtherAmount7 = s.OtherAmount7;
+        r.OtherAmount8 = s.OtherAmount8;
+        r.OtherAmount9 = s.OtherAmount9;
+        r.OtherAmount10 = s.OtherAmount10;
+        return r;
+    }
+
+    // The served legacy MediationContext.BillingSpans (uom -> enumbillingspan carrying the seconds) is the PRIMARY
+    // source. Fall back to the built-in StandardBillingSpans() ONLY when config-manager hasn't served the table
+    // (null/empty) — so existing tests + deployments without the served enumbillingspan table still resolve a
+    // rate plan's BillingSpan uom to seconds.
+    private static Map<String, enumbillingspan> ResolveBillingSpans(MediationContextDto dto) {
+        if (dto != null && dto.BillingSpans != null && !dto.BillingSpans.isEmpty()) {
+            return dto.BillingSpans;
+        }
+        return StandardBillingSpans();
+    }
+
+    // FALLBACK ONLY (see ResolveBillingSpans): the standard ofbiz time-frequency uoms -> seconds, used when the
+    // served billingSpans table is absent. A rate plan's BillingSpan uom string is resolved against this by A2ZRater.
+    private static Map<String, enumbillingspan> StandardBillingSpans() {
+        Map<String, enumbillingspan> m = new HashMap<>();
+        m.put("TF_s", Span("TF_s", 1));
+        m.put("TF_min", Span("TF_min", 60));
+        m.put("TF_hr", Span("TF_hr", 3600));
+        m.put("TF_day", Span("TF_day", 86400));
+        return m;
+    }
+
+    private static enumbillingspan Span(String uom, long seconds) {
+        enumbillingspan e = new enumbillingspan();
+        e.ofbiz_uom_Id = uom;
+        e.value = seconds;
+        return e;
     }
 
     private static ServiceGroupConfiguration ToSgConfig(ServiceGroupConfigDto dto) {

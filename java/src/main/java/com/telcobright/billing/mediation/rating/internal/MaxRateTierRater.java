@@ -1,7 +1,7 @@
 package com.telcobright.billing.mediation.rating.internal;
 
+import com.telcobright.billing.mediation.engine.models.Rateext;
 import com.telcobright.billing.mediation.engine.models.cdr;
-import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.rating.A2ZRater;
 import com.telcobright.billing.mediation.rating.BasicCharge;
 import com.telcobright.billing.mediation.rating.CallFacts;
@@ -45,7 +45,7 @@ public final class MaxRateTierRater implements ITierRater {
 
         var matched = _basicCharge.MatchCustomerRate(thisCdr, tier.Mediation(), tier.Partners());
         int serviceGroupId = matched.ServiceGroupId();
-        rateassign rate = matched.Rate();
+        Rateext rate = matched.Rate();
         if (serviceGroupId == 0)
             return new TierRating(tier.DbName(), tier.PartnerId(), 0, "service group not detected", List.of());
 
@@ -57,7 +57,9 @@ public final class MaxRateTierRater implements ITierRater {
 
         // cash candidate — the matched per-minute rate + the first-minute max (faithful A2Z over the first 60s).
         if (rate != null) {
-            var firstMinute = A2ZRater.Rate(rate, BigDecimal.valueOf(60), 60, 8).Amount();
+            var med = tier.Mediation();
+            var firstMinute = A2ZRater.Rate(rate, BigDecimal.valueOf(60),
+                    med.DicRatePlan, med.BillingSpans, med.MaxDecimalPrecision).Amount();
             candidates.add(new RateCandidate(0, "BDT", rate.rateamount.doubleValue(), firstMinute.doubleValue()));
         }
 

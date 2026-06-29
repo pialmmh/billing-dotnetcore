@@ -20,6 +20,15 @@ public final class MediationContextDto {
     public List<rateplanassignmenttuple> RatePlanAssignmentTuples;
 
     /**
+     * The served legacy {@code MediationContext.BillingSpans} (uom -> seconds): the {@code enumbillingspan}
+     * lookup keyed by uom string, each value carrying the seconds in its {@code value} field (its
+     * ofbiz_uom_Id/Type may be null on the wire — the MAP KEY is the uom the rater looks up). config-manager
+     * serves this from the existing {@code enumbillingspan} table. Absent until it does, in which case the
+     * mapper falls back to the built-in standard ofbiz uom table.
+     */
+    public Map<String, com.telcobright.billing.mediation.engine.models.enumbillingspan> BillingSpans;
+
+    /**
      * Per-service-group configuration (rating rules + validation checklists). Absent until
      * config-manager serves it, in which case the built-in defaults apply.
      */

@@ -25,9 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class MaxRateTierRaterTests {
     private static MediationContext Sg10() {
-        return MediationContext.ForRating(List.of(
-                TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0,
-                        TestData.Ra(1712, "2.5").idRatePlan(7))));
+        var f = TestData.fixture();
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "2.5").idRatePlan(7));
+        return f.mediation();
     }
 
     private static final Map<Integer, Partner> Retail5 = Map.of(5, new Partner(5, null, 3));

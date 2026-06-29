@@ -1,8 +1,8 @@
 package com.telcobright.billing.mediation.servicefamilies;
 
+import com.telcobright.billing.mediation.engine.models.Rateext;
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
-import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.model.AssignmentDirection;
 
 import java.math.BigDecimal;
@@ -17,7 +17,7 @@ final class ChargeableBuilder {
 
     private ChargeableBuilder() {}
 
-    static acc_chargeable Build(rateassign rate, cdr cdr, int serviceGroupId, int serviceFamilyId,
+    static acc_chargeable Build(Rateext rate, cdr cdr, int serviceGroupId, int serviceFamilyId,
             AssignmentDirection direction, BigDecimal billedAmount, BigDecimal quantity, BigDecimal tax) {
         var c = new acc_chargeable();
         c.servicegroup = serviceGroupId;
@@ -27,7 +27,7 @@ final class ChargeableBuilder {
         c.Quantity = quantity;
         c.TaxAmount1 = tax;
         c.unitPriceOrCharge = rate.rateamount;
-        c.Prefix = Integer.toString(rate.Prefix);
+        c.Prefix = rate.Prefix;
         c.RateId = rate.id;
         c.idQuantityUom = "TF_s";
         c.uniqueBillId = cdr.UniqueBillId;

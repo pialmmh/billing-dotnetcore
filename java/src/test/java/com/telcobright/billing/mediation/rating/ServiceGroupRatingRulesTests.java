@@ -5,7 +5,6 @@ import com.telcobright.billing.mediation.context.RatingRule;
 import com.telcobright.billing.mediation.context.Rule;
 import com.telcobright.billing.mediation.context.ServiceGroupConfiguration;
 import com.telcobright.billing.mediation.engine.models.cdr;
-import com.telcobright.billing.mediation.engine.models.rateplanassignmenttuple;
 import com.telcobright.billing.mediation.model.AssignmentDirection;
 import com.telcobright.billing.mediation.model.Partner;
 import com.telcobright.billing.testsupport.TestData;
@@ -21,15 +20,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Service-group-wise CONFIGURED rating rules (legacy ExecuteRating): {@code BasicCharge.Rate} runs the detected
- * SG's configured RatingRules — each names a family (by id) + direction — over the RateCache. These prove the
- * family/direction set is CONFIG-DRIVEN, not hardcoded: a disabled SG charges nothing, a swapped family id
- * changes the family that runs, and two rules yield two chargeables (customer + supplier).
- *
- * <p>Faithful port of ServiceGroupRatingRulesTests.cs. SUT is {@code BasicCharge} (package
- * {@code mediation.rating}). C# {@code (int)AssignmentDirection.Customer} -&gt;
- * {@code AssignmentDirection.Customer.value}; named-arg {@code serviceGroupConfigurations:} -&gt; the full
- * positional {@code ForRating} overload with nulls; {@code Assert.Contains(coll, predicate)} -&gt;
- * {@code anyMatch}.</p>
+ * SG's configured RatingRules — each names a family (by id) + direction — over the per-day RateCache. These
+ * prove the family/direction set is CONFIG-DRIVEN, not hardcoded: a disabled SG charges nothing, a swapped
+ * family id changes the family that runs, and two rules yield two chargeables (customer + supplier).
  */
 class ServiceGroupRatingRulesTests {
 
@@ -48,27 +41,29 @@ class ServiceGroupRatingRulesTests {
         return c;
     }
 
-    private static rateplanassignmenttuple CustTuple() {
-        return TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0,
-                TestData.Ra(1712, "1.0").idRatePlan(7));
+    // SG10 customer tuple: per-minute 1.0 for prefix 1712 (partner 5, rate plan 7).
+    private static TestData.Fixture CustFixture() {
+        var f = TestData.fixture();
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        return f;
     }
 
-    private static rateplanassignmenttuple SuppTuple() {
-        return TestData.Tup(10, AssignmentDirection.Supplier.value, 7, null, 0,
-                TestData.Ra(1712, "2.0").idRatePlan(8));
+    // …plus a SG10 supplier tuple: 2.0 for prefix 1712 (out-partner 7, rate plan 8).
+    private static TestData.Fixture CustSuppFixture() {
+        var f = CustFixture();
+        f.tup(10, AssignmentDirection.Supplier.value, 7, null, 0, TestData.Ra(1712, "2.0").idRatePlan(8));
+        return f;
     }
 
     private static Map<Integer, ServiceGroupConfiguration> Sg10(boolean disabled, RatingRule... rules) {
         List<Rule> ruleList = new ArrayList<>();
         for (RatingRule r : rules) ruleList.add(r);
-        // C# `new() { ServiceGroupId = 10, Disabled = disabled, Rules = rules }` — the two checklists stay at
-        // their `= []` default (null normalises to empty via the record's compact constructor).
         return Map.of(10, new ServiceGroupConfiguration(10, disabled, ruleList, null, null));
     }
 
     @Test
     void Default_config_runs_the_sg10_customer_rule() {
-        var med = MediationContext.ForRating(List.of(CustTuple()));   // built-in default SG configs
+        var med = CustFixture().mediation();   // built-in default SG configs
         var chargeables = BasicCharge.Default().Rate(Sg10Cdr(), med, Retail5);
 
         assertEquals(1, chargeables.size());
@@ -77,7 +72,7 @@ class ServiceGroupRatingRulesTests {
 
     @Test
     void Two_configured_rules_yield_a_customer_and_a_supplier_leg() {
-        var med = MediationContext.ForRating(List.of(CustTuple(), SuppTuple()));   // default: SF10 cust + SF1 supplier
+        var med = CustSuppFixture().mediation();   // default: SF10 cust + SF1 supplier
         var chargeables = BasicCharge.Default().Rate(Sg10Cdr(), med, Retail5);
 
         assertEquals(2, chargeables.size());
@@ -88,8 +83,7 @@ class ServiceGroupRatingRulesTests {
     @Test
     void Family_is_taken_from_config_not_hardcoded() {
         // configure SG10's customer rule to run SF11 instead of SF10
-        var med = MediationContext.ForRating(List.of(CustTuple()), null, null,
-                Sg10(false, new RatingRule(11, 1, null)), null);
+        var med = CustFixture().mediation(null, null, Sg10(false, new RatingRule(11, 1, null)), null);
         var chargeables = BasicCharge.Default().Rate(Sg10Cdr(), med, Retail5);
 
         assertEquals(1, chargeables.size());
@@ -98,8 +92,7 @@ class ServiceGroupRatingRulesTests {
 
     @Test
     void Disabled_service_group_charges_nothing() {
-        var med = MediationContext.ForRating(List.of(CustTuple()), null, null,
-                Sg10(true, new RatingRule(10, 1, null)), null);
+        var med = CustFixture().mediation(null, null, Sg10(true, new RatingRule(10, 1, null)), null);
 
         assertTrue(BasicCharge.Default().Rate(Sg10Cdr(), med, Retail5).isEmpty());
         assertNull(BasicCharge.Default().Compute(Sg10Cdr(), AssignmentDirection.Customer, med, Retail5));

@@ -54,9 +54,9 @@ class SummaryOutboxWriterTests {
     }
 
     private static MediationContext Mediation() {
-        return MediationContext.ForRating(List.of(
-                TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0,
-                        TestData.Ra(1712, "1.0").idRatePlan(7))));
+        var f = TestData.fixture();
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        return f.mediation();
     }
 
     private static final Map<Integer, Partner> RetailPartner5 =

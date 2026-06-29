@@ -23,16 +23,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class FinalizeEngineTests {
     private static MediationContext Mediation() {
-        return MediationContext.ForRating(List.of(
-                TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0,
-                        TestData.Ra(1712, "1.0").idRatePlan(7))));
+        var f = TestData.fixture();
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        return f.mediation();
     }
 
     // adds a SG10 supplier tuple (out-partner 7 @ 2.0/min) on top of the customer tuple.
     private static MediationContext MediationWithSupplier() {
-        return MediationContext.ForRating(List.of(
-                TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7)),
-                TestData.Tup(10, AssignmentDirection.Supplier.value, 7, null, 0, TestData.Ra(1712, "2.0").idRatePlan(8))));
+        var f = TestData.fixture();
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Supplier.value, 7, null, 0, TestData.Ra(1712, "2.0").idRatePlan(8));
+        return f.mediation();
     }
 
     private static final Map<Integer, Partner> RetailPartner5 = Map.of(5, new Partner(5, null, 3));

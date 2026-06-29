@@ -2,6 +2,9 @@
 package com.telcobright.billing.mediation.context;
 
 import com.telcobright.billing.mediation.engine.models.cdr;
+import com.telcobright.billing.mediation.engine.models.enumbillingspan;
+import com.telcobright.billing.mediation.engine.models.rate;
+import com.telcobright.billing.mediation.engine.models.rateplan;
 import com.telcobright.billing.mediation.engine.models.rateplanassignmenttuple;
 import com.telcobright.billing.mediation.rating.RatePlanResolver;
 import com.telcobright.billing.mediation.rating.ratecaching.RateCache;
@@ -17,16 +20,12 @@ import java.util.Map;
  * exactly one config snapshot per tenant: {@code tenant.Context.MediationContext}. Immutable; swapped wholesale
  * on reload.
  *
- * <p>Holds the category lookup (the cross-system id namespace), the ordered service-group detection rules, and
- * the {@link RatePlanResolver} over this tenant's verbatim legacy {@code rateplanassignmenttuple}s (each
- * carrying its {@code rateassigns}). config-manager serves {@code Categories} from the existing
- * EnumServiceCategory table; {@code ServiceGroupRules} arrives once its (additive) table is ratified — empty
- * until then.</p>
- *
- * <p>FAITHFUL-PORT NOTE: the C# {@code sealed class} with {@code { get; init; }} defaults + static factories
- * is ported to a final class with public fields (defaults matching C#), a static {@code Empty} singleton, and
- * static {@code ForRating(...)}. Call sites ({@code ctx.RatePlanResolver}, {@code MediationContext.Empty},
- * {@code MediationContext.ForRating(...)}) stay identical.</p>
+ * <p>Holds the category lookup, the ordered service-group detection rules, the per-SG rating configuration, the
+ * {@link RatePlanResolver} (which tuples apply), and the {@link RateCache} (their rates, per day) — both derived
+ * from the SAME tuples + rate rows + rate plans so they can never drift. It also carries the rating knobs the
+ * legacy read off the cache/CdrSetting: {@code DicRatePlan} (idrateplan -> rateplan), {@code BillingSpans}
+ * (uom -> seconds) and {@code MaxDecimalPrecision}, threaded into the rating path (BasicCharge -> family.Charge
+ * -> A2ZRater) so billing span + RateAmountRoundupDecimal can be read.</p>
  */
 public final class MediationContext {
     public Map<Integer, ServiceCategory> Categories = new HashMap<>();
@@ -35,39 +34,41 @@ public final class MediationContext {
 
     /**
      * Per-service-group rating configuration (the legacy {@code ServiceGroupConfigurations}): the ordered
-     * {@code RatingRule}s the rater runs for a detected SG. Defaults to the built-in set
-     * ({@code ServiceGroupConfiguration.Defaults}) until config-manager serves them.
+     * {@code RatingRule}s the rater runs for a detected SG. Defaults to the built-in set until config-manager
+     * serves them.
      */
     public Map<Integer, ServiceGroupConfiguration> ServiceGroupConfigurations = ServiceGroupConfiguration.Defaults;
 
-    /**
-     * The COMMON post-mediation qualification checklist run for every cdr regardless of service group
-     * (legacy CommonMediationCheckListValidator), before the per-SG answered/unanswered checklists.
-     */
+    /** The COMMON post-mediation qualification checklist run for every cdr, before the per-SG checklists. */
     public List<IValidationRule<cdr>> CommonChecklist = List.of();
 
-    /**
-     * Resolves which rate-plan-assignment tuples apply to a call (by service group + direction +
-     * partner/route), built from this tenant's legacy {@code rateplanassignmenttuple}s.
-     */
-    // NOTE: the field name equals the type name; the right-hand type is fully qualified so the simple name
-    // resolves to the type (not to this field) inside this instance initializer.
+    /** Resolves which rate-plan-assignment tuples apply to a call (legacy GetAssignmentTuples). */
     public RatePlanResolver RatePlanResolver = com.telcobright.billing.mediation.rating.RatePlanResolver.Empty;
 
-    /**
-     * The legacy per-day rate cache ({@code DateRangeWiseRateDic}), populated lazily for each day a call
-     * touches via {@link TupleRateLoader} over this tenant's config-served tuples. Built together with
-     * {@code RatePlanResolver} from the SAME tuples (use {@link #ForRating}); empty by default.
-     */
-    public RateCache RateCache = new RateCache(new TupleRateLoader(List.of()));
+    /** The legacy per-day rate cache ({@code DateRangeWiseRateDic}), built from this tenant's tuples + rates. */
+    public RateCache RateCache = new RateCache(new TupleRateLoader(List.of(), new HashMap<>(), new HashMap<>()));
+
+    /** legacy RateCache.DicRatePlan — key = idrateplan as string. The rater reads field4/BillingSpan/RateAmountRoundupDecimal. */
+    public Map<String, rateplan> DicRatePlan = new HashMap<>();
+
+    /** legacy MediationContext.BillingSpans — uom (rateplan.BillingSpan) -> enumbillingspan (carrying the seconds value). */
+    public Map<String, enumbillingspan> BillingSpans = new HashMap<>();
+
+    /** legacy CdrSetting.MaxDecimalPrecision — the HALF_EVEN rounding scale for the final amount (default 8). */
+    public int MaxDecimalPrecision = 8;
 
     /**
      * Builds a rating context from one tenant's legacy {@code rateplanassignmenttuple}s (each carrying its
-     * {@code rateassigns}): the {@link RatePlanResolver} (which tuples apply) and the {@link RateCache} (their
-     * rates, per day) are derived from the SAME list so they can never drift.
+     * {@code rateassigns} JOIN rows), the rate rows per rate plan, the rate plans, the billing-span uom table and
+     * the max precision: the {@link RatePlanResolver} (which tuples apply) and the {@link RateCache} (their rates,
+     * per day) are derived from the SAME data so they can never drift.
      */
     public static MediationContext ForRating(
             List<rateplanassignmenttuple> tuples,
+            Map<Integer, List<rate>> rateRowsByRatePlan,
+            Map<String, rateplan> dicRatePlan,
+            Map<String, enumbillingspan> billingSpans,
+            int maxDecimalPrecision,
             Map<Integer, ServiceCategory> categories,
             List<ServiceGroupRule> serviceGroupRules,
             Map<Integer, ServiceGroupConfiguration> serviceGroupConfigurations,
@@ -78,15 +79,25 @@ public final class MediationContext {
         ctx.ServiceGroupConfigurations = serviceGroupConfigurations != null
                 ? serviceGroupConfigurations : ServiceGroupConfiguration.Defaults;
         ctx.CommonChecklist = commonChecklist != null ? commonChecklist : List.of();
+        ctx.DicRatePlan = dicRatePlan != null ? dicRatePlan : new HashMap<>();
+        ctx.BillingSpans = billingSpans != null ? billingSpans : new HashMap<>();
+        ctx.MaxDecimalPrecision = maxDecimalPrecision;
         // FQN: the simple name `RatePlanResolver` would resolve to the instance field, not the type.
-        ctx.RatePlanResolver = com.telcobright.billing.mediation.rating.RatePlanResolver.Build(tuples);
-        ctx.RateCache = new RateCache(new TupleRateLoader(tuples));
+        ctx.RatePlanResolver = com.telcobright.billing.mediation.rating.RatePlanResolver.Build(tuples != null ? tuples : List.of());
+        ctx.RateCache = new RateCache(
+                new TupleRateLoader(tuples, rateRowsByRatePlan, ctx.DicRatePlan), ctx.DicRatePlan);
         return ctx;
     }
 
-    /** Convenience overload mirroring the C# optional parameters (tuples required, the rest default to null). */
-    public static MediationContext ForRating(List<rateplanassignmenttuple> tuples) {
-        return ForRating(tuples, null, null, null, null);
+    /** Convenience overload: rating tables only, the rest default. */
+    public static MediationContext ForRating(
+            List<rateplanassignmenttuple> tuples,
+            Map<Integer, List<rate>> rateRowsByRatePlan,
+            Map<String, rateplan> dicRatePlan,
+            Map<String, enumbillingspan> billingSpans,
+            int maxDecimalPrecision) {
+        return ForRating(tuples, rateRowsByRatePlan, dicRatePlan, billingSpans, maxDecimalPrecision,
+                null, null, null, null);
     }
 
     /** An empty context — the safe default before the first successful load. */

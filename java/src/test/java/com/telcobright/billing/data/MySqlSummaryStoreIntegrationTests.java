@@ -145,9 +145,9 @@ class MySqlSummaryStoreIntegrationTests {
         CreateSchema(conn);
 
         // mediation: SG10 customer tuple for partner 5 (1.0/min for prefix 1712)
-        var mediation = MediationContext.ForRating(List.of(
-                TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0,
-                        TestData.Ra(1712, "1.0").idRatePlan(7))));
+        var medFixture = TestData.fixture();
+        medFixture.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        var mediation = medFixture.mediation();
         var partners = Map.of(5, new Partner(5, null, 3));
         var facts = new FinalizeFacts("admin", "8801999000111", "8801712345678", ServiceType.Voice,
                 1, "in", "out", 0, LocalDateTime.of(2026, 6, 19, 14, 30, 0),

@@ -25,9 +25,9 @@ class BasicChargeTests {
 
     // SG10 customer tuple for partner 5: per-minute 1.0 for prefix 1712, rate plan 7.
     private static MediationContext Mediation() {
-        return MediationContext.ForRating(List.of(
-                TestData.Tup(10, AssignmentDirection.Customer.value, 5, null, 0,
-                        TestData.Ra(1712, "1.0").idRatePlan(7))));
+        var f = TestData.fixture();
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        return f.mediation();
     }
 
     private static Map<Integer, Partner> Partners(Partner... ps) {

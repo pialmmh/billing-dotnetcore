@@ -3,9 +3,9 @@ package com.telcobright.billing.mediation.rating;
 import com.telcobright.billing.mediation.context.MediationContext;
 import com.telcobright.billing.mediation.context.RatingRule;
 import com.telcobright.billing.mediation.context.ServiceGroupConfiguration;
+import com.telcobright.billing.mediation.engine.models.Rateext;
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
-import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.model.AssignmentDirection;
 import com.telcobright.billing.mediation.model.Partner;
 import com.telcobright.billing.mediation.rating.ratecaching.DateRange;
@@ -26,15 +26,12 @@ import java.util.stream.Collectors;
 
 /**
  * The per-cdr charge: detect the service group -&gt; run that SG's CONFIGURED rating rules
- * ({@code ServiceGroupConfiguration.Rules}, legacy {@code ExecuteRating}). Each rating rule names a
- * service family (by id) and an assignment direction; for each, the rate-plan tuples are resolved by
- * (idService, direction, partner/route), the legacy {@code PrefixMatcher} longest-prefixes over the
- * per-day {@code RateCache}, and the rule's {@code IServiceFamily} computes the charge -&gt; an
- * {@code acc_chargeable}. Replaces the previously-hardcoded (SG,direction)-&gt;family map: which families
- * run, in which direction, is now configuration (served by config-manager; built-in defaults otherwise).
- *
- * <p>The accounting/posting half of the legacy families (GL account, billing rule, acc_transaction) is
- * deferred to the mem-ledger slice — the chargeable here carries the rating fields the summary reads.
+ * ({@code ServiceGroupConfiguration.Rules}, legacy {@code ExecuteRating}). Each rating rule names a service
+ * family (by id) and an assignment direction; for each, the rate-plan tuples are resolved by (idService,
+ * direction, partner/route), the legacy {@link PrefixMatcher} longest-prefixes over the per-day
+ * {@code RateCache} (matching a {@link Rateext}), and the rule's {@link IServiceFamily} computes the charge
+ * -&gt; an {@code acc_chargeable}. The rating knobs (DicRatePlan / BillingSpans / MaxDecimalPrecision) ride on the
+ * {@link MediationContext} and are threaded into family.Charge -&gt; A2ZRater.
  */
 public final class BasicCharge {
     private final ServiceGroupDetection _detection;
@@ -61,16 +58,11 @@ public final class BasicCharge {
     }
 
     /**
-     * Run ALL of the detected service group's configured rating rules (legacy ExecuteRating) and
-     * return the resulting chargeables (one per rule that matched a rate). Empty if no SG is detected, the
-     * SG is disabled/unconfigured, or no rule produced a charge.
+     * Run ALL of the detected service group's configured rating rules (legacy ExecuteRating) and return the
+     * resulting chargeables (one per rule that matched a rate). Empty if no SG is detected, the SG is
+     * disabled/unconfigured, or no rule produced a charge.
      */
     public List<acc_chargeable> Rate(cdr cdr, MediationContext mediation, Map<Integer, Partner> partners) {
-        return Rate(cdr, mediation, partners, 8);
-    }
-
-    public List<acc_chargeable> Rate(
-            cdr cdr, MediationContext mediation, Map<Integer, Partner> partners, int maxDecimalPrecision) {
         var match = _detection.Detect(cdr, partners);
         if (match == null) return List.of();
         cdr.ServiceGroup = match.ServiceGroupId();   // stamp the detected SG (legacy serviceGroup.Execute)
@@ -80,24 +72,18 @@ public final class BasicCharge {
         var chargeables = new ArrayList<acc_chargeable>();
         for (RatingRule rule : sgConfig.Rules().stream()                      // the rating-kind rules, in order
                 .filter(r -> r instanceof RatingRule).map(r -> (RatingRule) r).collect(Collectors.toList())) {
-            var chargeable = ChargeRule(cdr, mediation, match, rule, maxDecimalPrecision);
+            var chargeable = ChargeRule(cdr, mediation, match, rule);
             if (chargeable != null) chargeables.add(chargeable);
         }
         return chargeables;
     }
 
     /**
-     * The single chargeable for the detected SG's first configured rule in the given direction —
-     * the per-leg convenience the per-call finalize path uses. Null if not detected / no such rule / no rate.
+     * The single chargeable for the detected SG's first configured rule in the given direction — the per-leg
+     * convenience the per-call finalize path uses. Null if not detected / no such rule / no rate.
      */
     public acc_chargeable Compute(cdr cdr, AssignmentDirection direction, MediationContext mediation,
             Map<Integer, Partner> partners) {
-        return Compute(cdr, direction, mediation, partners, 8);
-    }
-
-    public acc_chargeable Compute(
-            cdr cdr, AssignmentDirection direction, MediationContext mediation,
-            Map<Integer, Partner> partners, int maxDecimalPrecision) {
         var match = _detection.Detect(cdr, partners);
         if (match == null) return null;
         ServiceGroupConfiguration sgConfig = mediation.ServiceGroupConfigurations.get(match.ServiceGroupId());
@@ -107,16 +93,15 @@ public final class BasicCharge {
                 .filter(r -> r instanceof RatingRule).map(r -> (RatingRule) r)
                 .filter(r -> r.AssignDirection() == direction.value)
                 .findFirst().orElse(null);
-        return rule == null ? null : ChargeRule(cdr, mediation, match, rule, maxDecimalPrecision);
+        return rule == null ? null : ChargeRule(cdr, mediation, match, rule);
     }
 
     /**
-     * Detect the service group and match the CUSTOMER rate for a call WITHOUT charging it — the
-     * pre-call (max-rate / admission) path. Stamps {@code cdr.ServiceGroup}; returns the detected SG id (0 =
-     * not detected) and the matched {@code rateassign} (null if no SG / no rate).
+     * Detect the service group and match the CUSTOMER rate for a call WITHOUT charging it — the pre-call
+     * (max-rate / admission) path. Stamps {@code cdr.ServiceGroup}; returns the detected SG id (0 = not
+     * detected) and the matched {@link Rateext} (null if no SG / no rate).
      */
-    public MatchCustomerRateResult MatchCustomerRate(
-            cdr cdr, MediationContext mediation, Map<Integer, Partner> partners) {
+    public MatchCustomerRateResult MatchCustomerRate(cdr cdr, MediationContext mediation, Map<Integer, Partner> partners) {
         var match = _detection.Detect(cdr, partners);
         if (match == null) return new MatchCustomerRateResult(0, null);
         cdr.ServiceGroup = match.ServiceGroupId();
@@ -126,20 +111,19 @@ public final class BasicCharge {
 
     // One rating rule: resolve the family, look the rate up through the RateCache for the rule's direction,
     // and charge. The legacy A2ZRater path, per rule.
-    private acc_chargeable ChargeRule(
-            cdr cdr, MediationContext mediation, ServiceGroupMatch match, RatingRule rule, int maxDecimalPrecision) {
+    private acc_chargeable ChargeRule(cdr cdr, MediationContext mediation, ServiceGroupMatch match, RatingRule rule) {
         var family = _families.get(rule.IdServiceFamily());
         if (family == null) return null;
 
         var rate = MatchRate(cdr, mediation, match, rule.AssignDirection());
         if (rate == null) return null;
 
-        return family.Charge(rate, cdr, match.ServiceGroupId(), directionFromValue(rule.AssignDirection()), maxDecimalPrecision);
+        return family.Charge(rate, cdr, match.ServiceGroupId(), directionFromValue(rule.AssignDirection()), mediation);
     }
 
     // Resolve the rate-plan tuples for the (service group, direction, partner) and longest-prefix the dialed
     // number over the per-day RateCache (legacy PrefixMatcher). Shared by the charge + the max-rate paths.
-    private static rateassign MatchRate(cdr cdr, MediationContext mediation, ServiceGroupMatch match, int assignDirection) {
+    private static Rateext MatchRate(cdr cdr, MediationContext mediation, ServiceGroupMatch match, int assignDirection) {
         // Customer leg keys off the in-partner, supplier leg off the out-partner (legacy A2ZRater).
         Integer idPartner = (assignDirection == AssignmentDirection.Supplier.value)
                 ? cdr.OutPartnerId : cdr.InPartnerId;
@@ -147,8 +131,9 @@ public final class BasicCharge {
         var tuples = mediation.RatePlanResolver.Resolve(match.ServiceGroupId(), assignDirection, idPartner, null);
         if (tuples.isEmpty()) return null;
 
-        int category = cdr.Category != null ? cdr.Category : 1;          // legacy defaults: 1 = call
-        int subCategory = cdr.SubCategory != null ? cdr.SubCategory : 1; //                  1 = voice
+        // legacy ExecuteA2ZRating: tempCategory>0 ? tempCategory : 1 (0/null both default to 1=call/voice).
+        int category = (cdr.Category != null && cdr.Category > 0) ? cdr.Category : 1;
+        int subCategory = (cdr.SubCategory != null && cdr.SubCategory > 0) ? cdr.SubCategory : 1;
         LocalDateTime answerTime = cdr.AnswerTime != null ? cdr.AnswerTime : cdr.StartTime;
 
         var day = new DateRange(answerTime.toLocalDate().atStartOfDay(), answerTime.toLocalDate().atStartOfDay().plusDays(1));
@@ -173,9 +158,9 @@ public final class BasicCharge {
     }
 
     /**
-     * Java carrier for the C# named ValueTuple {@code (int ServiceGroupId, rateassign? Rate)} returned by
+     * Java carrier for the C# named ValueTuple {@code (int ServiceGroupId, Rateext? Rate)} returned by
      * {@link #MatchCustomerRate}.
      */
-    public record MatchCustomerRateResult(int ServiceGroupId, rateassign Rate) {
+    public record MatchCustomerRateResult(int ServiceGroupId, Rateext Rate) {
     }
 }
