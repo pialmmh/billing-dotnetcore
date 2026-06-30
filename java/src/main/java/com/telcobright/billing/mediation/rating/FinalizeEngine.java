@@ -3,27 +3,20 @@ package com.telcobright.billing.mediation.rating;
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.model.AssignmentDirection;
-import com.telcobright.billing.mediation.summary.CdrSummaryContext;
-import com.telcobright.billing.mediation.summary.CountingAutoIncrementManager;
-import com.telcobright.billing.mediation.summary.ISummaryStore;
-import com.telcobright.billing.mediation.summary.cache.IAutoIncrementManager;
 
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
-import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.function.Function;
 
 /**
- * The post-call charge + summary across the call's tiers — the compute body of {@code FinalizeAndSummarize}.
+ * The post-call charge across the call's tiers — the COMPUTE body of {@code FinalizeAndSummarize}.
  * Mirrors {@link MaxRateEngine}: iterate the per-tier inputs, settle each, return the map keyed by
  * dbName. Each tier settles the customer leg (+ the supplier leg for admin {@code TierMode.Full})
- * via {@link BasicCharge}, then — when a summary-store factory is supplied — builds, merges and
- * writes that tier's {@code sum_voice_*} via {@code CdrSummaryContext} (load existing -&gt; merge this
- * call -&gt; write) on the tier's store. With no factory it stays PURE COMPUTE (no DB), which the unit tests
- * use; the gRPC handler passes a store factory to persist.
+ * via {@link BasicCharge}. It is PURE COMPUTE (no DB): summaries are now OUTBOX-only and owned by the
+ * standalone summary-service, so finalize neither loads nor writes any summary — it only returns the
+ * per-tier settlements (the routesphere mem-ledger consumer applies them).
  */
 public final class FinalizeEngine {
     private final BasicCharge _basicCharge;
@@ -37,38 +30,22 @@ public final class FinalizeEngine {
     }
 
     public FinalizeResult Finalize(FinalizeFacts facts, List<FinalizeTierInput> chain) {
-        return Finalize(facts, chain, null, null);
-    }
-
-    public FinalizeResult Finalize(FinalizeFacts facts, List<FinalizeTierInput> chain,
-            Function<String, ISummaryStore> summaryStoreFor) {
-        return Finalize(facts, chain, summaryStoreFor, null);
-    }
-
-    public FinalizeResult Finalize(FinalizeFacts facts, List<FinalizeTierInput> chain,
-            Function<String, ISummaryStore> summaryStoreFor, IAutoIncrementManager ids) {
         if (chain.isEmpty())
             return FinalizeResult.Fail("unknown tenant '" + facts.Tenant() + "'");
 
         var settlements = new LinkedHashMap<String, TierSettlement>(chain.size());
         BigDecimal total = BigDecimal.ZERO;
         for (var tier : chain) {
-            CdrSummaryContext summaryContext = summaryStoreFor == null
-                    ? null
-                    : new CdrSummaryContext(summaryStoreFor.apply(tier.DbName()), ids != null ? ids : new CountingAutoIncrementManager());
-
-            var settlement = SettleTier(facts, tier, summaryContext);
+            var settlement = SettleTier(facts, tier);
             settlements.put(tier.DbName(), settlement);
             if (settlement.Error() == null) total = total.add(settlement.Charged());
-
-            if (summaryContext != null) summaryContext.WriteAllChanges();   // single-connection write into this tier's schema
         }
 
         var failing = settlements.values().stream().filter(s -> s.Error() != null).findFirst().orElse(null);
         return new FinalizeResult(failing == null, failing != null ? failing.Error() : "", settlements, total);
     }
 
-    private TierSettlement SettleTier(FinalizeFacts facts, FinalizeTierInput tier, CdrSummaryContext summaryContext) {
+    private TierSettlement SettleTier(FinalizeFacts facts, FinalizeTierInput tier) {
         var thisCdr = BuildCdr(facts, tier);
         var customer = _basicCharge.Compute(thisCdr, AssignmentDirection.Customer, tier.Mediation(), tier.Partners());
         if (customer == null)
@@ -81,14 +58,6 @@ public final class FinalizeEngine {
                 ? _basicCharge.Compute(thisCdr, AssignmentDirection.Supplier, tier.Mediation(), tier.Partners())
                 : null;
         BigDecimal supplierCost = supplier != null ? supplier.BilledAmount : BigDecimal.ZERO;
-
-        // Build + merge this call's summary onto the loaded rows (the supplier leg above already wrote the
-        // cdr's supplier fields the SG10 summary reads). The caller writes the cache afterward.
-        if (summaryContext != null) {
-            summaryContext.PopulatePrevSummary(List.of(customer.servicegroup),
-                    List.of(thisCdr.StartTime.toLocalDate().atStartOfDay()), List.of(HourOf(thisCdr.StartTime)));
-            summaryContext.AddCall(thisCdr, customer);
-        }
 
         // The reserved uom decides how the charge lands: package units (consumed minutes) vs cash (BDT).
         var reserved = tier.Reserved();
@@ -104,10 +73,6 @@ public final class FinalizeEngine {
                 uom, charged, packageAmount, inPartnerCost,
                 customer.TaxAmount1 != null ? customer.TaxAmount1 : BigDecimal.ZERO, supplierCost,
                 customer.Prefix, null);
-    }
-
-    private static LocalDateTime HourOf(LocalDateTime t) {
-        return LocalDateTime.of(t.getYear(), t.getMonthValue(), t.getDayOfMonth(), t.getHour(), 0, 0);
     }
 
     /**

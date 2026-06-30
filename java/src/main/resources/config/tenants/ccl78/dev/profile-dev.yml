@@ -56,11 +56,12 @@ billing:
     sms-enabled: false
     reseller-fanout-enabled: false                        # admin-only first slice
 
-  # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Off = legacy inline summaries.
-  # When enabled, a cdr batch writes ONE compressed summary_affected row (atomic with the cdr write) and pings
-  # the summary-service, which consumes the outbox. bootstrap-servers = CCL Kafka (same host as config-events).
+  # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Outbox is the only summary model;
+  # this gates the best-effort Kafka ping (the durable hand-off is the summary_affected row, always written).
+  # The cdr batch always writes ONE compressed summary_affected row (atomic with the cdr write); the
+  # summary-service consumes the outbox. bootstrap-servers = CCL Kafka (same host as config-events).
   summary:
-    enabled: false                                        # flip true at cutover
+    enabled: true                                         # outbox is THE summary model
     entity-type: "cdr"
     ping-topic: "cdr_summary_ping"
     bootstrap-servers: "103.95.96.78:9092"                # CCL Kafka

@@ -3,7 +3,6 @@ package com.telcobright.billing.data;
 import com.telcobright.billing.mediation.cdr.CdrBatch;
 import com.telcobright.billing.mediation.cdr.CdrBatchResult;
 import com.telcobright.billing.mediation.cdr.CdrPipeline;
-import com.telcobright.billing.mediation.cdr.SummaryMode;
 import com.telcobright.billing.mediation.context.MediationContext;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.model.Partner;
@@ -46,7 +45,7 @@ public final class MySqlCdrBatchRunner {
 
     public CdrBatchResult Run(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs,
-            IAutoIncrementManager ids, int segmentSize, SummaryMode summary) {
+            IAutoIncrementManager ids, int segmentSize) {
         try {
             conn.setAutoCommit(false);   // conn.BeginTransaction()
         } catch (SQLException e) {
@@ -55,7 +54,7 @@ public final class MySqlCdrBatchRunner {
         try {
             // the pipeline writes EVERYTHING through this connection-bound store — one connection, one transaction.
             var store = new MySqlSummaryStore(conn);
-            var batch = new CdrBatch(mediation, partners, cdrs, store, ids, segmentSize, summary);
+            var batch = new CdrBatch(mediation, partners, cdrs, store, ids, segmentSize);
             var result = _processor.Process(batch);
             conn.commit();        // the ONE commit for the batch
             return result;
@@ -77,21 +76,16 @@ public final class MySqlCdrBatchRunner {
         }
     }
 
-    // Default-parameter overloads — the C# method signed `ids = null, segmentSize = DefaultSegmentSize,
-    // summary = SummaryMode.Inline`. Java has no default args, so each shorter call site gets an overload that
-    // fills the trailing defaults and delegates to the canonical method (mirrors CdrBatch's port).
+    // Default-parameter overloads — the C# method signed `ids = null, segmentSize = DefaultSegmentSize`.
+    // Java has no default args, so each shorter call site gets an overload that fills the trailing defaults
+    // and delegates to the canonical method (mirrors CdrBatch's port).
     public CdrBatchResult Run(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs) {
-        return Run(conn, mediation, partners, cdrs, null, BatchSqlWriter.DefaultSegmentSize, SummaryMode.Inline);
+        return Run(conn, mediation, partners, cdrs, null, BatchSqlWriter.DefaultSegmentSize);
     }
 
     public CdrBatchResult Run(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs, IAutoIncrementManager ids) {
-        return Run(conn, mediation, partners, cdrs, ids, BatchSqlWriter.DefaultSegmentSize, SummaryMode.Inline);
-    }
-
-    public CdrBatchResult Run(Connection conn, MediationContext mediation,
-            Map<Integer, Partner> partners, List<cdr> cdrs, IAutoIncrementManager ids, int segmentSize) {
-        return Run(conn, mediation, partners, cdrs, ids, segmentSize, SummaryMode.Inline);
+        return Run(conn, mediation, partners, cdrs, ids, BatchSqlWriter.DefaultSegmentSize);
     }
 }

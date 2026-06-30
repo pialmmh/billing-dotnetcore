@@ -38,9 +38,10 @@ billing:
     sms-enabled: false
     reseller-fanout-enabled: false
 
-  # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Off = legacy inline summaries.
+  # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Outbox is the only summary model;
+  # this gates the best-effort Kafka ping (the durable hand-off is the summary_affected row, always written).
   summary:
-    enabled: false                                        # flip true at cutover
+    enabled: true                                         # outbox is THE summary model
     entity-type: "cdr"
     ping-topic: "cdr_summary_ping"
     bootstrap-servers: "10.10.199.20:9092,10.10.198.20:9092,10.10.197.20:9092"   # prod Kafka (same as config-events)

@@ -21,24 +21,18 @@ public record CdrBatch(
         List<cdr> Cdrs,
         ISummaryStore SummaryStore,
         IAutoIncrementManager Ids,
-        int SegmentSize,
-        SummaryMode Summary) {
+        int SegmentSize) {
 
-    // Default-parameter overloads — the C# record had `Ids = null, SegmentSize = DefaultSegmentSize,
-    // Summary = SummaryMode.Inline`. Java has no default args, so each shorter call site gets a constructor
-    // that fills the trailing defaults and delegates to the canonical constructor.
+    // Default-parameter overloads — the C# record had `Ids = null, SegmentSize = DefaultSegmentSize`.
+    // Java has no default args, so each shorter call site gets a constructor that fills the trailing
+    // defaults and delegates to the canonical constructor.
     public CdrBatch(MediationContext Mediation, Map<Integer, Partner> Partners, List<cdr> Cdrs,
                     ISummaryStore SummaryStore) {
-        this(Mediation, Partners, Cdrs, SummaryStore, null, BatchSqlWriter.DefaultSegmentSize, SummaryMode.Inline);
+        this(Mediation, Partners, Cdrs, SummaryStore, null, BatchSqlWriter.DefaultSegmentSize);
     }
 
     public CdrBatch(MediationContext Mediation, Map<Integer, Partner> Partners, List<cdr> Cdrs,
                     ISummaryStore SummaryStore, IAutoIncrementManager Ids) {
-        this(Mediation, Partners, Cdrs, SummaryStore, Ids, BatchSqlWriter.DefaultSegmentSize, SummaryMode.Inline);
-    }
-
-    public CdrBatch(MediationContext Mediation, Map<Integer, Partner> Partners, List<cdr> Cdrs,
-                    ISummaryStore SummaryStore, IAutoIncrementManager Ids, int SegmentSize) {
-        this(Mediation, Partners, Cdrs, SummaryStore, Ids, SegmentSize, SummaryMode.Inline);
+        this(Mediation, Partners, Cdrs, SummaryStore, Ids, BatchSqlWriter.DefaultSegmentSize);
     }
 }

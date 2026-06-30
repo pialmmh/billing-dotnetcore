@@ -1,14 +1,12 @@
 // Ported from legacy Mediation/Cdr/CdrExt.cs (TelcobrightMediation.Cdr).
-// TRIMMED for the routesphere feed: kept Cdr + Chargeables (the (sg,sf,dir) chargeable map) +
-// TableWiseSummaries + MediationResult. STRIPPED: PartialCdrContainer and the AccWiseTransactionContainer
-// maps. cdrerror path simplified away.
+// TRIMMED for the routesphere feed: kept Cdr + Chargeables (the (sg,sf,dir) chargeable map) + MediationResult.
+// STRIPPED: PartialCdrContainer and the AccWiseTransactionContainer maps; the TableWiseSummaries map (summaries
+// are now OUTBOX-only). cdrerror path simplified away.
 // NOTE: despite the file name, this declares NO C# extension methods — it is a plain wrapper class around
 // a `cdr` with computed accessors (UniqueBillId/IdCall/StartTime ported to methods per RULE 4).
 package com.telcobright.billing.mediation.engine.cdr;
 
-import com.telcobright.billing.mediation.engine.models.AbstractCdrSummary;
 import com.telcobright.billing.mediation.engine.models.CdrMediationResult;
-import com.telcobright.billing.mediation.engine.models.CdrSummaryType;
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
 
@@ -21,8 +19,6 @@ public class CdrExt {
     public CdrNewOldType CdrNewOldType;
     public cdr Cdr;
 
-    public Map<CdrSummaryType, AbstractCdrSummary> TableWiseSummaries;
-
     // key = (sg, sf, assignedDir); C# ValueTuple<int,int,int> -> java.util.List<Integer> (value equality).
     public Map<List<Integer>, acc_chargeable> Chargeables = new HashMap<>();
 
@@ -31,7 +27,6 @@ public class CdrExt {
     public CdrExt(cdr cdr, CdrNewOldType cdrExtType) {
         this.Cdr = cdr;
         this.CdrNewOldType = cdrExtType;
-        this.TableWiseSummaries = new HashMap<>();
     }
 
     /** C# computed property {@code UniqueBillId => this.Cdr.UniqueBillId}. */
