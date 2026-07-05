@@ -136,7 +136,8 @@ class CdrBatchAtomicityTests {
     private static void CreateOutboxTable(Connection c) {
         Exec(c, "drop table if exists summary_affected");
         Exec(c, "create table summary_affected (id bigint not null auto_increment, " +
-                "entity_type varchar(32) not null, data longtext not null, primary key (id))");
+                "entity_type varchar(32) not null, op varchar(16) not null default 'add', " +
+                "data longtext not null, primary key (id))");
     }
 
     private static String FirstOutboxData(Connection c) {
@@ -153,6 +154,7 @@ class CdrBatchAtomicityTests {
     void Batch_commits_atomically_on_success() {
         CreateDb(conn);
         CreatePermissive(conn, "cdr", cdr.ExtInsertColumns);
+        CreatePermissive(conn, "cdrerror", cdr.ExtInsertColumns);   // the IdCall seed reads max(idcall) over cdr + cdrerror
         CreatePermissive(conn, "acc_chargeable", acc_chargeable.ExtInsertColumns);
         CreateOutboxTable(conn);
 
@@ -175,6 +177,7 @@ class CdrBatchAtomicityTests {
     void Batch_rolls_back_entirely_on_a_mid_batch_failure() {
         CreateDb(conn);
         CreatePermissive(conn, "cdr", cdr.ExtInsertColumns);
+        CreatePermissive(conn, "cdrerror", cdr.ExtInsertColumns);
         CreateOutboxTable(conn);
         Exec(conn, "drop table if exists acc_chargeable");   // missing → the chargeable write (AFTER the cdr write) throws
 
@@ -190,6 +193,7 @@ class CdrBatchAtomicityTests {
     void Outbox_write_failure_rolls_back_the_whole_batch() {
         CreateDb(conn);
         CreatePermissive(conn, "cdr", cdr.ExtInsertColumns);
+        CreatePermissive(conn, "cdrerror", cdr.ExtInsertColumns);
         CreatePermissive(conn, "acc_chargeable", acc_chargeable.ExtInsertColumns);
         Exec(conn, "drop table if exists summary_affected");   // missing → the outbox write (LAST in the tx) throws
 

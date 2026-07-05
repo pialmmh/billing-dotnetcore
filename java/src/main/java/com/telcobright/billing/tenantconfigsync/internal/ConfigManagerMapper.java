@@ -145,14 +145,17 @@ final class ConfigManagerMapper {
         r.id = s.Id;
         r.Prefix = s.Prefix;
         r.idrateplan = s.IdRatePlan;
-        r.rateamount = s.RateAmount;
+        r.ProductId = s.ProductId != null ? s.ProductId : 0;
+        // C# `decimal` (non-nullable) defaulted a missing JSON field to 0 — a null here would NPE
+        // deep in the raters (MaxRateTierRater.doubleValue / A2ZRater's flat surcharge add).
+        r.rateamount = s.RateAmount != null ? s.RateAmount : java.math.BigDecimal.ZERO;
         r.CountryCode = s.CountryCode;
         r.Category = (byte) (s.Category != null ? s.Category : 1);
         r.SubCategory = (byte) (s.SubCategory != null ? s.SubCategory : 1);
         r.Resolution = s.Resolution != null ? s.Resolution : 0;
         r.MinDurationSec = s.MinDurationSec != null ? s.MinDurationSec.floatValue() : 0f;
         r.SurchargeTime = s.SurchargeTime != null ? s.SurchargeTime : 0;
-        r.SurchargeAmount = s.SurchargeAmount;
+        r.SurchargeAmount = s.SurchargeAmount != null ? s.SurchargeAmount : java.math.BigDecimal.ZERO;
         r.Inactive = s.Inactive != null ? s.Inactive : 0;
         r.startdate = s.StartDate != null ? s.StartDate : MinDate;
         r.enddate = s.EndDate;

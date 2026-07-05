@@ -6,7 +6,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.sql.ISqlExecutor;
-import com.telcobright.billing.mediation.summary.CountingAutoIncrementManager;
+import com.telcobright.billing.mediation.sql.CountingAutoIncrementManager;
 
 import java.math.BigDecimal;
 import java.sql.Connection;

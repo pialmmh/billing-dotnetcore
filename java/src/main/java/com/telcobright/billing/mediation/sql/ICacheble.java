@@ -7,7 +7,7 @@
 // (the non-generic marker would be the raw type of the generic one), so the marker is subsumed into the
 // raw form of this single generic interface. The other top-level types from the C# file
 // (CachedItem, SummaryMergeType, IAutoIncrementManager) are split into their own files in this package.
-package com.telcobright.billing.mediation.summary.cache;
+package com.telcobright.billing.mediation.sql;
 
 import java.util.function.Function;
 

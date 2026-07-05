@@ -48,6 +48,6 @@ public final class SfDomOffNetInAns implements IServiceFamily {
         cdr.CustomerRate = rate.rateamount;
 
         return ChargeableBuilder.Build(rate, cdr, serviceGroupId, Id(), direction,
-                ansAmount, billedDuration, btrcAmount);
+                ansAmount, billedDuration, btrcAmount, mediation);
     }
 }

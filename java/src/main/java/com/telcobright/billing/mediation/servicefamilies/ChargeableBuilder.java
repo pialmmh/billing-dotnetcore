@@ -1,5 +1,6 @@
 package com.telcobright.billing.mediation.servicefamilies;
 
+import com.telcobright.billing.mediation.context.MediationContext;
 import com.telcobright.billing.mediation.engine.models.Rateext;
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
@@ -18,7 +19,8 @@ final class ChargeableBuilder {
     private ChargeableBuilder() {}
 
     static acc_chargeable Build(Rateext rate, cdr cdr, int serviceGroupId, int serviceFamilyId,
-            AssignmentDirection direction, BigDecimal billedAmount, BigDecimal quantity, BigDecimal tax) {
+            AssignmentDirection direction, BigDecimal billedAmount, BigDecimal quantity, BigDecimal tax,
+            MediationContext mediation) {
         var c = new acc_chargeable();
         c.servicegroup = serviceGroupId;
         c.servicefamily = serviceFamilyId;
@@ -29,7 +31,15 @@ final class ChargeableBuilder {
         c.unitPriceOrCharge = rate.rateamount;
         c.Prefix = rate.Prefix;
         c.RateId = rate.id;
+        c.ProductId = rate.ProductId;                    // legacy: rate.ProductId (a rollup dimension)
         c.idQuantityUom = "TF_s";
+        // legacy: dicRateplan.Currency — the billed currency uom (a rollup dimension; null-currency
+        // rows would collapse cross-currency totals into one bucket).
+        var plan = mediation.DicRatePlan.get(rate.idrateplan != null ? rate.idrateplan.toString() : "");
+        c.idBilledUom = plan != null ? plan.Currency : null;
+        // legacy: the job-type tag ("nc" new cdr / "rc" reprocess). The batch path only mediates NEW
+        // cdrs today; the future correction producer writes "rc".
+        c.description = "nc";
         c.uniqueBillId = cdr.UniqueBillId;
         c.idEvent = cdr.IdCall;
         c.transactionTime = cdr.StartTime;

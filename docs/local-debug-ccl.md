@@ -1,9 +1,52 @@
-# Debug billing-core (Java/Quarkus) against the real CCL backend (config-manager + Kafka + DB)
+# Debug billing-core (Java/Quarkus): the CDR-processing → summary-outbox write path
 
-Run the **Java/Quarkus** billing-core locally (your dev box / a new device) wired to the **real CCL backend** —
-config-manager, Kafka, and DB — and attach a debugger. There is **no local-database fallback by design**: if a
-CCL endpoint is unreachable, bring up connectivity (the CCL VPN / route to the CCL subnet) — do not substitute a
-local database.
+Run the **Java/Quarkus** billing-core locally and attach a debugger to watch **CDR processing write to the
+summary outbox** — `ProcessCdrBatch` → rate → validate → write `cdr` + `cdrerror` + `acc_chargeable` +
+one `summary_affected` row, all in one transaction.
+
+> ⚠️ **UNCOMMITTED WORK (2026-07-05).** The current code — the audit fixes (SQL escaping, `max(id)` id-seeding,
+> per-cdr error isolation, RateCache race), **outbox v2** (the `op` add/subtract column, ALL chargeable legs in
+> the blob, the per-tenant `GET_LOCK` commit-ordering), and the `mediation/summary` → `mediation/sql` cut — is
+> **in the working tree, NOT committed/pushed**. A fresh `git clone` gets the older `7feef36` and will NOT match
+> this doc. **Before debugging on another PC: commit + push first** (or copy the working tree / debug on the box
+> that has it). `mvn -f java/pom.xml test` should report **89 passing** on the current tree.
+
+Two DB targets:
+
+| Target | When | DB reachability |
+|---|---|---|
+| **Local MySQL** (§A) | fast iteration on the write logic — recommended for "does CDR processing write the outbox?" | `127.0.0.1:3306` (no VPN) |
+| **Real CCL backend** (§B) | faithful end-to-end against real schema + real ping consumer | CCL DB `103.95.96.77` needs the **CCL VPN** |
+
+Rating is **DB-free** either way — rates come from **CCL config-manager (`103.95.96.78:7072`, open internet)**.
+So the local-MySQL path still exercises real rating; only the writes land locally.
+
+---
+
+## §A — Local MySQL fast path (no VPN) ← use this to debug the write path
+
+1. **Create the schema** (permissive throwaway DB — proves the writes, types not enforced):
+   ```bash
+   mysql -h 127.0.0.1 -P 3306 -u root -p123456 -e 'create database if not exists ccl_debug'
+   mysql -h 127.0.0.1 -P 3306 -u root -p123456 ccl_debug < docs/local-debug-schema.sql
+   ```
+   (`docs/local-debug-schema.sql` creates `cdr`, `cdrerror`, `acc_chargeable`, `summary_affected` — the last
+   with the real `id AUTO_INCREMENT` + `op` column.)
+2. **Point the profile at it** — in `java/src/main/resources/config/tenants/ccl78/dev/profile-dev.yml`,
+   `billing.datasource`: `host: 127.0.0.1`, `database: ccl_debug`, `username: root`, `password: 123456`.
+   (`config-manager.base-url` and the `summary` block stay on CCL — leave them.)
+3. **Run + drive** (§3–§5 below), then inspect: `SELECT id, entity_type, op FROM ccl_debug.summary_affected;`
+   → base64-decode → gunzip → JSON to see `[{Cdr, Chargeables:[...]}]`.
+
+The rest of this doc (§B) is the real-CCL-backend path.
+
+---
+
+## §B — Against the real CCL backend (config-manager + Kafka + DB)
+
+Wired to the **real CCL backend**. There is **no local-database fallback in this mode**: if a CCL endpoint is
+unreachable, bring up connectivity (the CCL VPN / route to the CCL subnet) — do not substitute a local database
+here (use §A for that).
 
 > This is the canonical version. The Java port lives under **`java/`** in the repo; the legacy .NET version
 > (`src/Billing/`) is being retired. All paths below are the Java ones.
@@ -38,7 +81,7 @@ If the DB is UNREACHABLE, bring up the **CCL VPN / route to `103.95.96.77`**. Do
 ```bash
 git clone git@github.com:pialmmh/billing-dotnetcore.git
 cd billing-dotnetcore
-mvn -f java/pom.xml clean package            # expect: BUILD SUCCESS, 104 tests pass
+mvn -f java/pom.xml clean package            # expect: BUILD SUCCESS, 89 tests pass
 # faster inner loop once it's green: add -DskipTests
 ```
 
@@ -121,16 +164,26 @@ walkthrough in `docs/postman-e2e-testing.md` still applies field-for-field (same
 target **`localhost:9000`** instead of the old .NET `:5293`.
 
 ## 6. Outbox / summary debug (the decoupled path)
-Everything is config — there are no environment switches.
-1. Apply the outbox table into the CCL tenant schema(s): `java/src/main/resources/sql/summary_outbox.sql`
-   (creates `summary_affected`).
-2. In `profile-dev.yml` set `billing.summary.enabled: true` (default `false` = legacy inline). The `summary`
-   block already carries `ping-topic: cdr_summary_ping` and `bootstrap-servers` = CCL Kafka.
+Summary is **outbox-ONLY** — there is no inline summary engine anymore. The batch ALWAYS writes one compressed
+`summary_affected` row atomically with the cdr/chargeable write; `billing.summary.enabled` only gates the
+best-effort Kafka *ping* (the durable hand-off is the row itself). Everything is config — no env switches.
+1. Apply the outbox table into the target schema: `java/src/main/resources/sql/summary_outbox.sql` (creates
+   `summary_affected` with `id AUTO_INCREMENT`, `entity_type`, **`op ENUM('add','subtract')`**, `data`).
+   (§A's `local-debug-schema.sql` already includes it.)
+2. `billing.summary.enabled: true` is already set in `profile-dev.yml`; the `summary` block carries
+   `ping-topic: cdr_summary_ping` + CCL `bootstrap-servers`.
 3. `mvn -f java/pom.xml quarkus:dev`.
 
-Call `ProcessCdrBatch` → observe a row in `summary_affected` (CCL DB) and a message on `cdr_summary_ping` (CCL
-Kafka); the summary-service consumes it. Inspect the blob: `SELECT data FROM summary_affected\G` → base64-decode
-→ gunzip → JSON.
+Call `ProcessCdrBatch` → observe a row in `summary_affected` and (CCL mode) a message on `cdr_summary_ping`;
+the summary-service consumes it. Inspect the blob:
+```sql
+SELECT id, entity_type, op, data FROM summary_affected\G
+```
+`op` = `add` for normal batches (`subtract` is reserved for the future correction producer). Decode `data`:
+base64 → gunzip → JSON = an array of **`{Cdr, Chargeables:[...ALL legs...]}`** (v2; the old shape was
+`{Cdr, Customer}` — a v2-aware consumer still reads both). The summary-service side (its beans, the ledger-free
+chargeable summary, table self-provisioning) is a SEPARATE service — see
+`/tmp/shared-instruction/summary-service-work-order.md`; this doc stops at the billing write.
 
 ## If a CCL endpoint is unreachable
 This is expected without connectivity. Bring up the **VPN / route to the CCL subnet** (especially `103.95.96.77`)

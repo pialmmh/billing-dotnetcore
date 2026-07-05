@@ -14,16 +14,20 @@ import com.telcobright.billing.mediation.engine.models.rateplan;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class RateCache {
     private static final Object Locker = new Object();
     private final IRateLoader _loader;
 
     // MAIN RATE CACHE — all rates loaded per day in the cache.
-    // (Legacy constructed this with a DateRange.EqualityComparer; Java HashMap uses DateRange's own
+    // (Legacy constructed this with a DateRange.EqualityComparer; the map uses DateRange's own
     //  equals()/hashCode(), which implements the same (StartDate, EndDate) value-equality.)
+    // ConcurrentHashMap because gRPC worker threads read (GetRateDictsByDay's unsynchronized get)
+    // while a day-rollover populate writes under the Locker — a plain HashMap gave no
+    // happens-before for the first read and could return a torn/spurious-null view.
     public Map<DateRange, Map<TupleByPeriod, Map<String, List<Rateext>>>> DateRangeWiseRateDic =
-        new HashMap<>();
+        new ConcurrentHashMap<>();
 
     // legacy RateCache.DicRatePlan — key = idrateplan as string. The rater reads field4 (techPrefix),
     // BillingSpan (uom) and RateAmountRoundupDecimal from here.

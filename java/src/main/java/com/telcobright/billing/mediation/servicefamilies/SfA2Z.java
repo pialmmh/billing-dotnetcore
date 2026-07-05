@@ -39,7 +39,9 @@ public final class SfA2Z implements IServiceFamily {
                 maxDecimalPrecision);
         if (direction == AssignmentDirection.Supplier) cdr.Tax2 = tax; else cdr.Tax1 = tax;
 
+        // The tax lands ONLY on the cdr (Tax1/Tax2 above): legacy SfA2Z.CreateChargeable never sets
+        // chargeable.TaxAmount1 — filling it here would over-count TaxAmount1 in a chargeable rollup.
         return ChargeableBuilder.Build(rate, cdr, serviceGroupId, Id(), direction,
-                a2z.Amount(), a2z.BilledDurationSec(), tax);
+                a2z.Amount(), a2z.BilledDurationSec(), null, mediation);
     }
 }

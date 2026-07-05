@@ -31,6 +31,6 @@ public final class SfA2ZWithVatTax implements IServiceFamily {
         if (direction == AssignmentDirection.Supplier) cdr.Tax2 = tax; else cdr.Tax1 = tax;
 
         return ChargeableBuilder.Build(rate, cdr, serviceGroupId, Id(), direction,
-                a2z.Amount(), a2z.BilledDurationSec(), tax);
+                a2z.Amount(), a2z.BilledDurationSec(), tax, mediation);
     }
 }

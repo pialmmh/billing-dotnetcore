@@ -1,10 +1,10 @@
-// Split from legacy Mediation/Summary/ISummaryStore.cs.
-package com.telcobright.billing.mediation.summary;
+// Split from legacy Mediation/Summary/ISqlExecutor.cs.
+package com.telcobright.billing.mediation.sql;
 
 import java.util.HashMap;
 import java.util.Map;
 
-import com.telcobright.billing.mediation.summary.cache.IAutoIncrementManager;
+import com.telcobright.billing.mediation.sql.IAutoIncrementManager;
 
 /**
  * A simple monotonic id source per table (legacy IAutoIncrementManager). The live implementation seeds each

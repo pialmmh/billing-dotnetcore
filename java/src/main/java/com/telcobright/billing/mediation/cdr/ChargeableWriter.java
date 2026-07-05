@@ -3,7 +3,7 @@ package com.telcobright.billing.mediation.cdr;
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.sql.BatchSqlWriter;
 import com.telcobright.billing.mediation.sql.ISqlExecutor;
-import com.telcobright.billing.mediation.summary.cache.IAutoIncrementManager;
+import com.telcobright.billing.mediation.sql.IAutoIncrementManager;
 
 import java.util.ArrayList;
 import java.util.List;

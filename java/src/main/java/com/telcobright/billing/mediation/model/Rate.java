@@ -23,6 +23,8 @@ public class Rate {
     public long Id;
     public String Prefix;
     public Integer IdRatePlan;
+    /** column {@code ProductId} — copied onto the chargeable ({@code acc_chargeable.ProductId}, a rollup dimension). */
+    public Integer ProductId;
     public BigDecimal RateAmount;
     public String CountryCode;
     public Integer Category;

@@ -5,7 +5,7 @@ import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.model.AssignmentDirection;
 import com.telcobright.billing.mediation.model.Partner;
-import com.telcobright.billing.mediation.summary.ISummaryStore;
+import com.telcobright.billing.mediation.sql.ISqlExecutor;
 import com.telcobright.billing.testsupport.TestData;
 import org.junit.jupiter.api.Test;
 
@@ -27,8 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SummaryOutboxWriterTests {
 
-    // The in-memory tx executor fake: records the emitted SQL (ISummaryStore is now just an ISqlExecutor seam).
-    private static final class InMemorySummaryStore implements ISummaryStore {
+    // The in-memory tx executor fake: records the emitted SQL (the tx-bound ISqlExecutor seam).
+    private static final class InMemorySqlExecutor implements ISqlExecutor {
         final List<String> ExecutedSql = new ArrayList<>();
 
         @Override
@@ -69,14 +69,14 @@ class SummaryOutboxWriterTests {
     }
 
     private static String ExtractBase64(String outboxInsert) {
-        final String marker = "values ('cdr', '";
+        final String marker = "values ('cdr', 'add', '";
         int start = outboxInsert.indexOf(marker) + marker.length();
         return outboxInsert.substring(start, outboxInsert.length() - 2);   // strip trailing ')
     }
 
     @Test
     void Batch_writes_one_summary_affected_row_and_no_inline_summary() {
-        InMemorySummaryStore store = new InMemorySummaryStore();
+        InMemorySqlExecutor store = new InMemorySqlExecutor();
         LocalDateTime when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);
         CdrBatch batch = new CdrBatch(Mediation(), RetailPartner5, List.of(
                 Call("8801712345678", when),
@@ -96,7 +96,7 @@ class SummaryOutboxWriterTests {
 
     @Test
     void Outbox_blob_round_trips_the_cdrs_and_their_customer_chargeable() {
-        InMemorySummaryStore store = new InMemorySummaryStore();
+        InMemorySqlExecutor store = new InMemorySqlExecutor();
         LocalDateTime when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);
         CdrBatch batch = new CdrBatch(Mediation(), RetailPartner5, List.of(
                 Call("8801712345678", when),

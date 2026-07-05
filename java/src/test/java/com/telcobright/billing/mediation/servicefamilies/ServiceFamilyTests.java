@@ -57,8 +57,10 @@ class ServiceFamilyTests {
         assertEquals(0, new BigDecimal("2.0").compareTo(ch.BilledAmount));        // 60s @ 2.0/min supplier rate
         assertEquals(0, new BigDecimal("2.0").compareTo(thisCdr.OutPartnerCost));
         assertEquals(0, new BigDecimal("2.0").compareTo(thisCdr.SupplierRate));
-        assertEquals(0, new BigDecimal("0.5").compareTo(ch.TaxAmount1));          // InPartnerCost(1.0) * 50/100
-        assertEquals(0, new BigDecimal("0.5").compareTo(thisCdr.Tax2));
+        // legacy SfA2Z.CreateChargeable never sets chargeable.TaxAmount1 — the tax lives ONLY on the
+        // cdr leg field (Tax2 for supplier); filling TaxAmount1 would over-count a chargeable rollup.
+        assertNull(ch.TaxAmount1);
+        assertEquals(0, new BigDecimal("0.5").compareTo(thisCdr.Tax2));           // InPartnerCost(1.0) * 50/100
         assertEquals("1712", thisCdr.MatchedPrefixSupplier);
     }
 

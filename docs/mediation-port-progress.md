@@ -1,8 +1,10 @@
 # Mediation port — progress & resume note
 
-> **Read this first after a compaction.** Then rejoin the shared dev log:
-> `bash "$HOME/.claude/bin/devlog.sh" startdev routesphere dotnet` (role = **dotnet**; architect is routesphere side).
-> Resume at **NEXT STEP #1** (per-tenant RateCache wiring) below.
+> ⚠️ **HISTORICAL (.NET-era). SUPERSEDED.** This is the commit-by-commit log of the original **.NET 8** port;
+> everything below (`dotnet build`, `src/Billing`, the RateCache/FinalizeEngine step list, "NEXT STEPS") is
+> pre-Java-port history, kept for provenance only. **For current state + what's next, read the project memory
+> `project_billing_mediation_port.md`; to build/run/debug, read `docs/local-debug-ccl.md`.** Do not resume from
+> the steps below.
 
 ## Goal
 Port the legacy C# CDR mediation into **telcobright-billing-core (.NET 8)**, starting with **service groups 10 & 11**, computing the post-call charge + writing CDR + summary **per tier** (admin + each reseller). Reuse the proven business logic; replace only the legacy tech.

@@ -4,8 +4,8 @@
 // Plain POCO — no EF/framework deps. The cdr write rides the same single-connection segmented write path.
 package com.telcobright.billing.mediation.engine.models;
 
-import com.telcobright.billing.mediation.summary.cache.ICacheble;
-import com.telcobright.billing.mediation.summary.cache.MySqlFieldExtensions;
+import com.telcobright.billing.mediation.sql.ICacheble;
+import com.telcobright.billing.mediation.sql.MySqlFieldExtensions;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;

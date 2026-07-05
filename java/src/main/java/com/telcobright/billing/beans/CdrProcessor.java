@@ -67,23 +67,29 @@ public class CdrProcessor {
         if (!connections.IsConfigured())
             return CdrProcessingResult.Failed("datasource credentials not configured (set billing.datasource.username / password in profile-<env>.yml)");
 
+        CdrBatchResult r = null;
         try (Connection conn = connections.Open(tenant)) {
             // The pipeline always writes ONE compressed summary_affected outbox row (atomic with the cdr write);
             // the standalone summary-service consumes it. (The old inline summary roll-up has been removed.)
-            CdrBatchResult r = batchRunner.Run(conn, resolved.Context.MediationContext, resolved.Context.Partners,
-                    cdrs);
-
-            // after the commit, nudge the summary-service (best-effort; it also polls the outbox).
-            if (summary.Enabled)
-                summaryPublisher.Publish(tenant, summary.EntityType, r.Rated().size());
-
-            log.infof("CdrProcessor tenant=%s cdrs=%d rated=%d errored=%d charged=%s",
-                    tenant, cdrs.size(), r.Rated().size(), r.Errored().size(), r.TotalCharged());
-
-            return CdrProcessingResult.Ok(r);
+            r = batchRunner.Run(conn, resolved.Context.MediationContext, resolved.Context.Partners, cdrs);
         } catch (Exception ex) {
-            log.error("CdrProcessor tenant=" + tenant + " rolled back", ex);
-            return CdrProcessingResult.Failed(ex.getMessage());
+            // r stays null when Run itself failed (the batch rolled back). r non-null means the commit
+            // SUCCEEDED and the exception came after — realistically conn.close() — so the batch IS
+            // durable: report success, or the caller would retry an already-committed batch (double bill).
+            if (r == null) {
+                log.error("CdrProcessor tenant=" + tenant + " rolled back", ex);
+                return CdrProcessingResult.Failed(ex.getMessage());
+            }
+            log.warn("CdrProcessor tenant=" + tenant + " committed, but closing the connection failed", ex);
         }
+
+        // after the commit, nudge the summary-service (best-effort; it also polls the outbox).
+        if (summary.Enabled)
+            summaryPublisher.Publish(tenant, summary.EntityType, r.Rated().size());
+
+        log.infof("CdrProcessor tenant=%s cdrs=%d rated=%d errored=%d charged=%s",
+                tenant, cdrs.size(), r.Rated().size(), r.Errored().size(), r.TotalCharged());
+
+        return CdrProcessingResult.Ok(r);
     }
 }

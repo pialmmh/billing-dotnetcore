@@ -18,7 +18,7 @@ import com.telcobright.billing.mediation.context.ServiceGroupConfiguration;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.model.AssignmentDirection;
 import com.telcobright.billing.mediation.model.Partner;
-import com.telcobright.billing.mediation.summary.ISummaryStore;
+import com.telcobright.billing.mediation.sql.ISqlExecutor;
 import com.telcobright.billing.mediation.validation.IValidationRule;
 import com.telcobright.billing.testsupport.TestData;
 
@@ -30,8 +30,8 @@ import com.telcobright.billing.testsupport.TestData;
  */
 class CdrPipelineTests {
 
-    // The in-memory tx executor fake: records the emitted SQL (ISummaryStore is now just an ISqlExecutor seam).
-    private static final class InMemorySummaryStore implements ISummaryStore {
+    // The in-memory tx executor fake: records the emitted SQL (ISqlExecutor is now just an ISqlExecutor seam).
+    private static final class InMemorySqlExecutor implements ISqlExecutor {
         final List<String> ExecutedSql = new ArrayList<>();
 
         @Override
@@ -69,7 +69,7 @@ class CdrPipelineTests {
 
     @Test
     void Processes_a_batch_rates_each_and_writes_the_summary_outbox_row() {
-        var store = new InMemorySummaryStore();
+        var store = new InMemorySqlExecutor();
         var when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);
         var batch = new CdrBatch(Mediation(), RetailPartner5, List.of(
                 Call("8801712345678", when),
@@ -112,7 +112,7 @@ class CdrPipelineTests {
 
     @Test
     void Validation_checklist_gates_the_cdr_and_is_separate_for_answered_vs_failed() {
-        var store = new InMemorySummaryStore();
+        var store = new InMemorySqlExecutor();
         // SG10's ANSWERED checklist requires a calling number; the unanswered checklist stays empty.
         ServiceGroupConfiguration base = ServiceGroupConfiguration.Defaults.get(10);
         Map<Integer, ServiceGroupConfiguration> configs = Map.of(
@@ -138,7 +138,7 @@ class CdrPipelineTests {
 
     @Test
     void Empty_batch_writes_nothing() {
-        var store = new InMemorySummaryStore();
+        var store = new InMemorySqlExecutor();
         var result = CdrPipeline.Default().Process(
                 new CdrBatch(Mediation(), RetailPartner5, List.<cdr>of(), store));
 

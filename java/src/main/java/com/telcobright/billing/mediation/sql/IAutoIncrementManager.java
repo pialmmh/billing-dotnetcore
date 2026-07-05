@@ -1,5 +1,5 @@
 // Split from legacy Mediation/Summary/Cache/ICacheble.cs.
-package com.telcobright.billing.mediation.summary.cache;
+package com.telcobright.billing.mediation.sql;
 
 /**
  * Source of new row ids per entity/table (legacy IAutoIncrementManager; keyed by table name here instead

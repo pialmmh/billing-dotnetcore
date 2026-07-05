@@ -8,14 +8,21 @@
 --
 -- Decoupling contract (see /tmp/shared-instruction/summary-service-outbox-design.md):
 --   * billing writes ONE summary_affected row per cdr batch, atomically with cdr/chargeable.
---   * data = the batch's rated cdrs (each + its customer acc_chargeable), JSON → gzip → base64.
+--   * data = the batch's rated cdrs (each + ALL its acc_chargeable legs), JSON → gzip → base64.
+--   * op   = 'add' for normal batches; corrections write 'subtract' (old values) + 'add' (new values).
 --   * Kafka carries only a PING; this table is the durable hand-off.
+--   * billing serializes batches per schema via GET_LOCK('billing_batch_<schema>') held across the
+--     commit, so outbox ids are COMMIT-ordered and the consumer's id>offset cursor never skips rows.
 -- =====================================================================================
 
 CREATE TABLE IF NOT EXISTS summary_affected (
     id          BIGINT       NOT NULL AUTO_INCREMENT,
     entity_type VARCHAR(32)  NOT NULL,                  -- 'cdr' (future: other event entities)
-    data        LONGTEXT     NOT NULL,                  -- gzip(JSON array of {Cdr, Customer}) then base64
+    op          ENUM('add','subtract') NOT NULL DEFAULT 'add',  -- how the consumer folds the row in:
+                                                        -- normal batch = 'add'; a correction writes a
+                                                        -- 'subtract' row (the OLD values) + an 'add' row
+                                                        -- (the NEW values) in ONE billing transaction
+    data        LONGTEXT     NOT NULL,                  -- gzip(JSON array of {Cdr, Chargeables[]}) then base64
     PRIMARY KEY (id),
     KEY ix_entity (entity_type, id)                     -- the summary-service scans WHERE entity_type=? AND id>offset
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

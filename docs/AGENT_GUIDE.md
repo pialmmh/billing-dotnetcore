@@ -1,5 +1,19 @@
 # Agent guide — working on telcobright-billing-core
 
+> ⚠️ **THIS GUIDE IS .NET-ERA AND PARTLY SUPERSEDED (as of 2026-07).** The service was **ported to
+> Java/Quarkus** — the live code is under **`java/`** (Java 21, package `com.telcobright.billing`); the
+> `src/Billing` .NET tree is retired. Corrections that override §3–§4 below:
+> - **Build/test/run:** `mvn -f java/pom.xml clean package` (**89 tests**), then `mvn -f java/pom.xml
+>   quarkus:dev` (gRPC on **:9000**, JDWP on :5005). Not `dotnet …`, not `:5293`.
+> - **Summary is OUTBOX-ONLY** — the inline `CdrSummaryContext` step (§4 phase 3) is GONE. The batch writes
+>   one `summary_affected` row (v2: `op` column + ALL chargeable legs); a standalone **summary-service**
+>   consumes it. Pipeline is now 2 phases (mediate+qualify → write).
+> - **Secrets:** DB creds are **inline in the profile YAML** for this project (OpenBao dropped) — §2 rule 5 is void here.
+> - **The runnable, current instructions are `docs/local-debug-ccl.md`** (+ `docs/local-debug-schema.sql` for a
+>   local-MySQL write-path debug). The authoritative current-state narrative is the project memory
+>   `project_billing_mediation_port.md`. The principles in §2 (faithful port, one-commit-per-batch, reuse
+>   tested code, stop-and-ask on unreachable infra) STILL HOLD. Read the rest of this file for history/context only.
+
 Read this first if you're an AI agent picking up this repo. It's the **how to work on it** map:
 principles, build/run, architecture, current state, what's next, and the one live blocker.
 

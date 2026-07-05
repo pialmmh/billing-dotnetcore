@@ -1,13 +1,13 @@
 package com.telcobright.billing.data;
 
-import com.telcobright.billing.mediation.summary.ISummaryStore;
+import com.telcobright.billing.mediation.sql.ISqlExecutor;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 
 /**
- * The live {@link ISummaryStore} over MySQL (JDBC) — the batch's tx-bound SQL executor. It runs on a
+ * The live {@link ISqlExecutor} over MySQL (JDBC) — the batch's tx-bound SQL executor. It runs on a
  * caller-supplied connection so it shares the single per-call connection the atomic write uses;
  * {@code ExecuteNonQuery} runs the cdr / chargeable / summary-outbox INSERTs in that transaction.
  *
@@ -15,10 +15,10 @@ import java.sql.Statement;
  * dropped — JDBC has no separate transaction object; statements created from the connection already run in
  * the connection's current transaction (the batch runner owns it via setAutoCommit(false)).</p>
  */
-public final class MySqlSummaryStore implements ISummaryStore {
+public final class MySqlExecutor implements ISqlExecutor {
     private final Connection _conn;
 
-    public MySqlSummaryStore(Connection conn) {
+    public MySqlExecutor(Connection conn) {
         _conn = conn;
     }
 

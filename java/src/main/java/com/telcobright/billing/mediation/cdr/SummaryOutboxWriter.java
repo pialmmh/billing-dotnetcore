@@ -16,11 +16,13 @@ import java.util.zip.GZIPOutputStream;
 
 /**
  * Writes ONE {@code summary_affected} OUTBOX row for the batch — the decoupled alternative to the inline
- * summary write. The batch's qualified cdrs (each with its customer-leg {@link Entry} {@code acc_chargeable} —
- * what the summary builder reads) are serialised to JSON, gzipped, then base64-encoded into the row's
- * {@code data} column, and inserted through the batch's tx-bound {@link ISqlExecutor}. So it commits / rolls
- * back ATOMICALLY with the cdr + chargeable write. The summary-service reads this row, decompresses it, and
- * merges the deltas INCREMENTALLY (a daily window has millions of cdrs — never a full recompute).
+ * summary write. The batch's qualified cdrs (each with ALL its chargeable legs, {@link Entry} — the voice
+ * summary reads the customer leg, the chargeable summary reads every leg) are serialised to JSON, gzipped,
+ * then base64-encoded into the row's {@code data} column, and inserted through the batch's tx-bound
+ * {@link ISqlExecutor}. So it commits / rolls back ATOMICALLY with the cdr + chargeable write. The
+ * summary-service reads this row, decompresses it, and merges the deltas INCREMENTALLY per the row's
+ * {@code op} ({@code add}, or {@code subtract} for corrections — a daily window has millions of cdrs, never
+ * a full recompute).
  *
  * <p>base64 is used (not a 0x hex blob) so the value is a plain single-quoted SQL string with no escaping
  * needed (its alphabet has no quote/backslash), and it travels cleanly to the Java consumer (base64 → gunzip
@@ -32,6 +34,12 @@ public final class SummaryOutboxWriter {
     /** The entity tag on the outbox row + the summary-service's per-bean offset key. */
     public static final String DefaultEntityType = "cdr";
 
+    /** Row operations: how the summary-service folds the row in. Normal batches are {@code add}; a
+     * correction writes a {@code subtract} row holding the OLD rated values (negated by the consumer)
+     * followed by an {@code add} row with the NEW ones, in the same transaction. */
+    public static final String OpAdd = "add";
+    public static final String OpSubtract = "subtract";
+
     private static final ObjectMapper Json = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
             .configure(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES, true) // C# PropertyNameCaseInsensitive = true
@@ -39,27 +47,33 @@ public final class SummaryOutboxWriter {
     // (drop the cdr's many null fields → smaller blob)
 
     /** Write the batch's rated cdrs as a single compressed outbox row; returns rows affected (0 or 1). */
-    public static int Write(ISqlExecutor sql, List<RatedCdr> rated, String entityType, String table) {
+    public static int Write(ISqlExecutor sql, List<RatedCdr> rated, String entityType, String table, String op) {
         if (rated.isEmpty()) return 0;
         var data = Encode(rated);
-        var stmt = "insert into " + table + " (entity_type, data) values ('" + entityType + "', '" + data + "')";
+        var stmt = "insert into " + table + " (entity_type, op, data) values ('" + entityType + "', '" + op
+                + "', '" + data + "')";
         return sql.ExecuteNonQuery(stmt);
     }
 
     /** Write the batch's rated cdrs as a single compressed outbox row; returns rows affected (0 or 1). */
+    public static int Write(ISqlExecutor sql, List<RatedCdr> rated, String entityType, String table) {
+        return Write(sql, rated, entityType, table, OpAdd);
+    }
+
+    /** Write the batch's rated cdrs as a single compressed outbox row; returns rows affected (0 or 1). */
     public static int Write(ISqlExecutor sql, List<RatedCdr> rated, String entityType) {
-        return Write(sql, rated, entityType, "summary_affected");
+        return Write(sql, rated, entityType, "summary_affected", OpAdd);
     }
 
     /** Write the batch's rated cdrs as a single compressed outbox row; returns rows affected (0 or 1). */
     public static int Write(ISqlExecutor sql, List<RatedCdr> rated) {
-        return Write(sql, rated, DefaultEntityType, "summary_affected");
+        return Write(sql, rated, DefaultEntityType, "summary_affected", OpAdd);
     }
 
     /** cdrs+chargeables → JSON → gzip → base64 (the {@code data} column value). */
     public static String Encode(List<RatedCdr> rated) {
         var entries = new ArrayList<Entry>(rated.size());
-        for (var r : rated) entries.add(new Entry(r.Cdr(), r.Customer()));
+        for (var r : rated) entries.add(new Entry(r.Cdr(), r.Chargeables()));
 
         try {
             var jsonBytes = Json.writeValueAsBytes(entries);

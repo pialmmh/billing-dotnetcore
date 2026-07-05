@@ -5,8 +5,8 @@
 // The chargeable rides the same single-connection ISqlExecutor write path as the summary.
 package com.telcobright.billing.mediation.engine.models;
 
-import com.telcobright.billing.mediation.summary.cache.ICacheble;
-import com.telcobright.billing.mediation.summary.cache.MySqlFieldExtensions;
+import com.telcobright.billing.mediation.sql.ICacheble;
+import com.telcobright.billing.mediation.sql.MySqlFieldExtensions;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;

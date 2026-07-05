@@ -11,7 +11,7 @@
 // null-aware method. The merged method returns "null" for a null arg (the C# nullable behaviour) and the
 // formatted value otherwise (the C# non-null behaviour) — identical for every input either C# overload
 // could actually receive.
-package com.telcobright.billing.mediation.summary.cache;
+package com.telcobright.billing.mediation.sql;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -24,6 +24,15 @@ public final class MySqlFieldExtensions {
 
     public static String EncloseWith(String text, String encloseWith) {
         return encloseWith + text + encloseWith;
+    }
+
+    // MySQL string-literal escaping: backslash first, then quote-doubling. The sink is a raw
+    // Statement.executeUpdate (no PreparedStatement), and cdr string fields arrive from external
+    // producers — an unescaped ' aborts the whole batch INSERT, an unescaped \ silently corrupts
+    // the stored value. (Legacy never escaped because its file decoder stripped illegal characters;
+    // that normalizer layer is not part of this port, so the literal must protect itself.)
+    private static String EscapeSql(String text) {
+        return text.replace("\\", "\\\\").replace("'", "''");
     }
 
     public static String ReplaceNullWith(String val, String nullAlternate) {
@@ -52,7 +61,7 @@ public final class MySqlFieldExtensions {
     // string; a non-null string -> quoted (the legacy "null"-string quirk is preserved).
     public static String ToMySqlField(String val) {
         String str = ReplaceNullWith(val, "null");
-        return str.equalsIgnoreCase("null") ? str : EncloseWith(str, "'");
+        return str.equalsIgnoreCase("null") ? str : EncloseWith(EscapeSql(str), "'");
     }
 
     public static String ToMySqlField(Long val) {
@@ -73,6 +82,6 @@ public final class MySqlFieldExtensions {
 
     /** Non-null string -&gt; quoted; null/empty -&gt; '' (legacy ToNotNullSqlField). */
     public static String ToNotNullSqlField(String val) {
-        return EncloseWith(ReplaceNullWith(val, ""), "'");
+        return EncloseWith(EscapeSql(ReplaceNullWith(val, "")), "'");
     }
 }

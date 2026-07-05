@@ -4,8 +4,8 @@ import com.telcobright.billing.mediation.context.MediationContext;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.model.Partner;
 import com.telcobright.billing.mediation.sql.BatchSqlWriter;
-import com.telcobright.billing.mediation.summary.cache.IAutoIncrementManager;
-import com.telcobright.billing.mediation.summary.ISummaryStore;
+import com.telcobright.billing.mediation.sql.IAutoIncrementManager;
+import com.telcobright.billing.mediation.sql.ISqlExecutor;
 
 import java.util.List;
 import java.util.Map;
@@ -19,7 +19,7 @@ public record CdrBatch(
         MediationContext Mediation,
         Map<Integer, Partner> Partners,
         List<cdr> Cdrs,
-        ISummaryStore SummaryStore,
+        ISqlExecutor Sql,
         IAutoIncrementManager Ids,
         int SegmentSize) {
 
@@ -27,12 +27,12 @@ public record CdrBatch(
     // Java has no default args, so each shorter call site gets a constructor that fills the trailing
     // defaults and delegates to the canonical constructor.
     public CdrBatch(MediationContext Mediation, Map<Integer, Partner> Partners, List<cdr> Cdrs,
-                    ISummaryStore SummaryStore) {
-        this(Mediation, Partners, Cdrs, SummaryStore, null, BatchSqlWriter.DefaultSegmentSize);
+                    ISqlExecutor Sql) {
+        this(Mediation, Partners, Cdrs, Sql, null, BatchSqlWriter.DefaultSegmentSize);
     }
 
     public CdrBatch(MediationContext Mediation, Map<Integer, Partner> Partners, List<cdr> Cdrs,
-                    ISummaryStore SummaryStore, IAutoIncrementManager Ids) {
-        this(Mediation, Partners, Cdrs, SummaryStore, Ids, BatchSqlWriter.DefaultSegmentSize);
+                    ISqlExecutor Sql, IAutoIncrementManager Ids) {
+        this(Mediation, Partners, Cdrs, Sql, Ids, BatchSqlWriter.DefaultSegmentSize);
     }
 }
