@@ -6,6 +6,7 @@ import com.telcobright.billing.mediation.rating.BasicCharge;
 import com.telcobright.billing.mediation.rating.FinalizeEngine;
 import com.telcobright.billing.mediation.rating.MaxRateEngine;
 import com.telcobright.billing.mediation.rating.internal.MaxRateTierRater;
+import com.telcobright.billing.tenantconfigsync.dependencies.CdrIngestOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.DatasourceOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.ProfileConfigReader;
 import com.telcobright.billing.tenantconfigsync.dependencies.SummaryOutboxOptions;
@@ -61,6 +62,12 @@ public class BillingConfig {
     @Singleton
     public SummaryOutboxOptions summaryOutboxOptions(TenantSelection selection) {
         return ProfileConfigReader.ReadSummary(selection);
+    }
+
+    @Produces
+    @Singleton
+    public CdrIngestOptions cdrIngestOptions(TenantSelection selection) {
+        return ProfileConfigReader.ReadCdrIngest(selection);
     }
 
     // --- Tenant registry + the config-sync machinery ----------------------------------------------

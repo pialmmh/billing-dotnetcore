@@ -95,6 +95,12 @@ public final class ProfileConfigReader {
         return yaml == null ? new SummaryOutboxOptions() : ReadSummaryFromYaml(yaml);
     }
 
+    /** Reads the active profile's billing.cdr-ingest block (the inbound Kafka CDR consumer switch + topic). */
+    public static CdrIngestOptions ReadCdrIngest(TenantSelection selection) {
+        String yaml = loadActiveProfileYaml(selection);
+        return yaml == null ? new CdrIngestOptions() : ReadCdrIngestFromYaml(yaml);
+    }
+
     // ── YAML parsers (package-private, deterministic — unit-tested directly with inline YAML) ────
 
     static TenantConfigSyncOptions ReadOptionsFromYaml(String yaml) {
@@ -154,6 +160,23 @@ public final class ProfileConfigReader {
             options.EntityType = s.EntityType != null ? s.EntityType : options.EntityType;
             options.PingTopic = s.PingTopic != null ? s.PingTopic : options.PingTopic;
             options.BootstrapServers = s.BootstrapServers;
+        }
+        return options;
+    }
+
+    static CdrIngestOptions ReadCdrIngestFromYaml(String yaml) {
+        CdrIngestOptions options = new CdrIngestOptions();
+        BillingYaml billing = billingOf(yaml);
+        CdrIngestYaml c = billing != null ? billing.CdrIngest : null;
+        if (c != null) {
+            options.Enabled = c.Enabled;
+            options.BootstrapServers = c.BootstrapServers != null ? c.BootstrapServers : "";
+            options.Topic = c.Topic != null ? c.Topic : options.Topic;
+            options.ConsumerGroup = c.ConsumerGroup != null ? c.ConsumerGroup : options.ConsumerGroup;
+            options.DeadLetterTopic = c.DeadLetterTopic != null ? c.DeadLetterTopic : options.DeadLetterTopic;
+            if (c.PollMs > 0) {
+                options.PollMs = c.PollMs;
+            }
         }
         return options;
     }
@@ -219,6 +242,16 @@ public final class ProfileConfigReader {
         public ConfigEventsYaml ConfigEvents;
         public DatasourceYaml Datasource;
         public SummaryYaml Summary;
+        public CdrIngestYaml CdrIngest;
+    }
+
+    static final class CdrIngestYaml {
+        public boolean Enabled;
+        public String BootstrapServers;
+        public String Topic;
+        public String ConsumerGroup;
+        public String DeadLetterTopic;
+        public int PollMs;
     }
 
     static final class DatasourceYaml {

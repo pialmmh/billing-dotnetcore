@@ -50,6 +50,18 @@ billing:
     username: ""                                           # CCL dev DB user  — TODO: set
     password: ""                                           # CCL dev DB password — TODO: set
 
+  # Inbound Kafka CDR ingest (T1) — the real cdr path. routesphere produces rated CDRs to `topic`
+  # (key = channelCallUuid, value = CdrEvent[] for one call); billing-core consumes, preprocesses, and
+  # writes per tenant. Offsets commit AFTER the DB commit (at-least-once). Disabled by default; enable to
+  # run the loop (the broker must be reachable — its advertised listener is the CCL-internal address).
+  cdr-ingest:
+    enabled: true                                         # T1 live test (2026-07-07); set false to stop consuming
+    bootstrap-servers: "103.95.96.78:9092"                # CCL Kafka (same broker as config-events)
+    topic: "cdr"
+    consumer-group: "billing-core-cdr-ingest"
+    dead-letter-topic: "cdr_dlq"
+    poll-ms: 500
+
   # Mediation/rating module toggles (billing-core specific).
   mediation:
     voice-enabled: true

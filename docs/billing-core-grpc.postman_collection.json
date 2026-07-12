@@ -1,0 +1,91 @@
+{
+  "info": {
+    "_postman_id": "c0ffee00-b111-4a11-9c0d-b1111a220001",
+    "name": "billing-core (gRPC) \u2014 CDR debug",
+    "description": "gRPC test/debug collection for telcobright-billing-core.\n\nServer: localhost:9000 (h2c, TLS OFF).\ngRPC has no message schema in a bare collection \u2014 after importing, open each request and\nattach the service definition via 'Import a .proto file' -> java/src/main/proto/billing.proto\n(service telcobright.billing.v1.RatingService). Then Invoke.\n\nProcessCdrBatch is THE CDR debug entry (drives the same pipeline the Kafka consumer will feed,\nwriting cdr + acc_chargeable + summary_affected in ONE tx). Needs DB creds set on the service\nand telcobright.summary_affected provisioned. With rates not yet served, cdrs are rejected to\ncdrerror (errored>0) \u2014 that still exercises the write path.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "ProcessCdrBatch (drive the CDR write pipeline)",
+      "request": {
+        "method": "GRPC",
+        "header": [],
+        "description": "Batch of cdrs for ONE tenant -> pipeline -> writes to that tenant's schema in one tx.",
+        "url": {
+          "raw": "grpc://localhost:9000",
+          "protocol": "grpc",
+          "host": [
+            "localhost"
+          ],
+          "port": "9000",
+          "path": []
+        },
+        "body": {
+          "mode": "grpc",
+          "grpc": {
+            "serviceName": "telcobright.billing.v1.RatingService",
+            "methodName": "ProcessCdrBatch",
+            "message": "{\n  \"tenant\": \"res_233_2\",\n  \"cdrsJson\": [\n    \"{\\\"SwitchId\\\": 1, \\\"SequenceNumber\\\": 1881104, \\\"UniqueBillId\\\": \\\"2-169791@103.95.96.78\\\", \\\"StartTime\\\": \\\"2026-06-17T13:34:43\\\", \\\"AnswerTime\\\": \\\"2026-06-17T13:34:54\\\", \\\"EndTime\\\": \\\"2026-06-17T13:34:56\\\", \\\"DurationSec\\\": 2.055, \\\"OriginatingCallingNumber\\\": \\\"09646999999\\\", \\\"OriginatingCalledNumber\\\": \\\"8801789896378\\\", \\\"TerminatingCalledNumber\\\": \\\"8801789896378\\\", \\\"OriginatingIP\\\": \\\"103.95.96.78\\\", \\\"TerminatingIP\\\": \\\"103.95.96.98\\\", \\\"InPartnerId\\\": 236, \\\"OutPartnerId\\\": 234, \\\"PrePaid\\\": 1, \\\"MatchedPrefixCustomer\\\": \\\"880\\\", \\\"CustomerRate\\\": 0.35, \\\"Codec\\\": \\\"PCMU\\\", \\\"ChargingStatus\\\": 1, \\\"Category\\\": 1, \\\"SubCategory\\\": 1}\",\n    \"{\\\"SwitchId\\\": 1, \\\"SequenceNumber\\\": 1881106, \\\"UniqueBillId\\\": \\\"2-169792@103.95.96.78\\\", \\\"StartTime\\\": \\\"2026-06-17T13:40:00\\\", \\\"AnswerTime\\\": \\\"2026-06-17T13:40:03\\\", \\\"EndTime\\\": \\\"2026-06-17T13:40:33\\\", \\\"DurationSec\\\": 30, \\\"OriginatingCallingNumber\\\": \\\"09646999999\\\", \\\"TerminatingCalledNumber\\\": \\\"8801712000000\\\", \\\"InPartnerId\\\": 236, \\\"PrePaid\\\": 1, \\\"ChargingStatus\\\": 1, \\\"Category\\\": 1, \\\"SubCategory\\\": 1}\"\n  ]\n}",
+            "metadata": []
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "GetMaxRatePerMinute (admission)",
+      "request": {
+        "method": "GRPC",
+        "header": [],
+        "description": "Pre-call admission; per-tier rate candidates.",
+        "url": {
+          "raw": "grpc://localhost:9000",
+          "protocol": "grpc",
+          "host": [
+            "localhost"
+          ],
+          "port": "9000",
+          "path": []
+        },
+        "body": {
+          "mode": "grpc",
+          "grpc": {
+            "serviceName": "telcobright.billing.v1.RatingService",
+            "methodName": "GetMaxRatePerMinute",
+            "message": "{\n  \"tenant\": \"res_233_2\",\n  \"partnerId\": 236,\n  \"callingNumber\": \"8801711000000\",\n  \"calledNumber\": \"8801712345678\",\n  \"sourceIp\": \"10.0.0.1\",\n  \"serviceType\": \"VOICE\",\n  \"startEpochMillis\": \"1750000000000\",\n  \"levels\": [\n    {\n      \"depth\": 0,\n      \"partnerId\": 336\n    },\n    {\n      \"depth\": 1,\n      \"partnerId\": 1\n    },\n    {\n      \"depth\": 2,\n      \"partnerId\": 236\n    }\n  ]\n}",
+            "metadata": []
+          }
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "FinalizeAndSummarize (post-call, compute-only)",
+      "request": {
+        "method": "GRPC",
+        "header": [],
+        "description": "Post-call per-level settlement (no DB write today).",
+        "url": {
+          "raw": "grpc://localhost:9000",
+          "protocol": "grpc",
+          "host": [
+            "localhost"
+          ],
+          "port": "9000",
+          "path": []
+        },
+        "body": {
+          "mode": "grpc",
+          "grpc": {
+            "serviceName": "telcobright.billing.v1.RatingService",
+            "methodName": "FinalizeAndSummarize",
+            "message": "{\n  \"facts\": {\n    \"tenant\": \"res_233_2\",\n    \"serviceType\": \"VOICE\",\n    \"callerNumber\": \"8801711000000\",\n    \"calledNumber\": \"8801712345678\",\n    \"incomingRoute\": \"in\",\n    \"outgoingRoute\": \"out\",\n    \"switchId\": 1,\n    \"sessionId\": \"sess-demo-1\",\n    \"sipCallId\": \"callid-demo-1\",\n    \"startEpochMillis\": \"1750000000000\"\n  },\n  \"levels\": [\n    {\n      \"depth\": 0,\n      \"partnerId\": 336\n    },\n    {\n      \"depth\": 1,\n      \"partnerId\": 1\n    },\n    {\n      \"depth\": 2,\n      \"partnerId\": 236\n    }\n  ],\n  \"answerEpochMillis\": \"1750000005000\",\n  \"endEpochMillis\": \"1750000065000\",\n  \"billsec\": 60,\n  \"answered\": true,\n  \"reservedAmount\": 5.0\n}",
+            "metadata": []
+          }
+        }
+      },
+      "response": []
+    }
+  ]
+}

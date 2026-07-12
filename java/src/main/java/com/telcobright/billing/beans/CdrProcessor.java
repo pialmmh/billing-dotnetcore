@@ -2,12 +2,15 @@ package com.telcobright.billing.beans;
 
 import com.telcobright.billing.data.MySqlCdrBatchRunner;
 import com.telcobright.billing.data.MySqlConnectionFactory;
+import com.telcobright.billing.ingest.CdrKafkaConsumer;
 import com.telcobright.billing.mediation.cdr.CdrBatchResult;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
+import com.telcobright.billing.tenantconfigsync.dependencies.CdrIngestOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.SummaryOutboxOptions;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
@@ -35,23 +38,36 @@ public class CdrProcessor {
     private final MySqlCdrBatchRunner batchRunner;
     private final SummaryOutboxOptions summary;
     private final SummaryChangeNotificationPublisher summaryPublisher;
+    private final CdrIngestOptions cdrIngest;
+
+    private CdrKafkaConsumer cdrConsumer;             // started on onStart when cdr ingest is enabled
 
     @Inject
     public CdrProcessor(ITenantRegistry tenants, MySqlConnectionFactory connections,
             MySqlCdrBatchRunner batchRunner, SummaryOutboxOptions summary,
-            SummaryChangeNotificationPublisher summaryPublisher) {
+            SummaryChangeNotificationPublisher summaryPublisher, CdrIngestOptions cdrIngest) {
         this.tenants = tenants;
         this.connections = connections;
         this.batchRunner = batchRunner;
         this.summary = summary;
         this.summaryPublisher = summaryPublisher;
+        this.cdrIngest = cdrIngest;
     }
 
-    /** Startup seam: this is where the Kafka cdr ingest loop will be launched (read a batch -> ProcessBatch).
-     * Not wired yet — the cdr topic + wire format are still to be defined, so today cdrs arrive via the gRPC
-     * entry. Kept here so the bean IS the startup component (mirrors the .NET IHostedService.StartAsync). */
+    /** Startup seam: launch the inbound Kafka cdr ingest loop (poll -> preprocess -> ProcessBatch). When cdr
+     * ingest is disabled (or no broker configured) the loop is not started and cdrs arrive via the gRPC entry.
+     * Mirrors the .NET IHostedService.StartAsync + BillingBootstrap's config-event source wiring. */
     void onStart(@Observes StartupEvent ev) {
-        log.info("CdrProcessor started (gRPC-fed; Kafka cdr ingest loop pending a defined contract)");
+        cdrConsumer = CdrKafkaConsumer.Start(this, tenants, cdrIngest, log);
+        if (cdrConsumer == null)
+            log.info("CdrProcessor started (gRPC-fed; Kafka cdr ingest loop not running)");
+        else
+            log.info("CdrProcessor started (Kafka cdr ingest loop running)");
+    }
+
+    @PreDestroy
+    void onStop() {
+        if (cdrConsumer != null) cdrConsumer.stop();
     }
 
     /**

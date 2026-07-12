@@ -117,6 +117,18 @@ public class cdr implements ICacheble<cdr> {
     public Long ChangedByJobId;
     public LocalDateTime SignalingStartTime = LocalDateTime.of(1, 1, 1, 0, 0);
 
+    // --- NEW columns carried by the Kafka `cdr_rated` ingest (cdr-kafka-ingest-contract §2) ---
+    // These EXTEND the legacy engine model ("extend, don't replace"); they are NOT part of the legacy
+    // 104-col ExtInsertColumns order below. They are populated by CdrEventPreprocessor. The write-layer
+    // wiring (append to ExtInsertColumns/GetExtInsertValues + DDL) is a SEPARATE staged change — until then
+    // these are in-memory only (mapped + carried through the pipeline, not yet persisted to their own columns).
+    public String ResellerHierarchy;
+    public String ChannelCallUuid;
+    public String HangupCause;
+    public String InPartnerUom;
+    public Long IdPackageAccount;
+    public BigDecimal PackageAmount;
+
     // _StaticExtInsertColumnHeaders.cdr column list (between the parens), exact order.
     public static final String ExtInsertColumns =
             "SwitchId,IdCall,SequenceNumber,FileName,ServiceGroup,IncomingRoute,OriginatingIP,OPC,OriginatingCIC," +
