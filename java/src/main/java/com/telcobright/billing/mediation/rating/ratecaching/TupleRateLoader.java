@@ -35,14 +35,22 @@ public final class TupleRateLoader implements IRateLoader {
     private static final LocalDateTime MaxDate = LocalDateTime.of(9999, 12, 31, 23, 59, 59);
 
     private final List<rateplanassignmenttuple> _tuples;
-    private final Map<Integer, List<rate>> _rateRowsByRatePlan;
+    private final RateRowsByDateProvider _rowsProvider;
     private final Map<String, rateplan> _dicRatePlan;
 
+    /** Legacy/test path: a single fixed rate-row snapshot used for every day (today-only behaviour). */
     public TupleRateLoader(List<rateplanassignmenttuple> tuples,
             Map<Integer, List<rate>> rateRowsByRatePlan,
             Map<String, rateplan> dicRatePlan) {
+        this(tuples, RateRowsByDateProvider.ofFixed(rateRowsByRatePlan), dicRatePlan);
+    }
+
+    /** Config-fed path: the rate rows are resolved PER DAY (snapshot for today/tomorrow, fetched for back-dates). */
+    public TupleRateLoader(List<rateplanassignmenttuple> tuples,
+            RateRowsByDateProvider rowsProvider,
+            Map<String, rateplan> dicRatePlan) {
         _tuples = tuples != null ? tuples : new ArrayList<>();
-        _rateRowsByRatePlan = rateRowsByRatePlan != null ? rateRowsByRatePlan : new HashMap<>();
+        _rowsProvider = rowsProvider != null ? rowsProvider : RateRowsByDateProvider.ofFixed(null);
         _dicRatePlan = dicRatePlan != null ? dicRatePlan : new HashMap<>();
     }
 
@@ -51,6 +59,9 @@ public final class TupleRateLoader implements IRateLoader {
         // (Legacy keyed dicByDay with a TupleByPeriod.EqualityComparer; Java's HashMap uses TupleByPeriod's
         //  own equals()/hashCode() — the same (IdAssignmentTuple, DRange) value-equality.)
         var result = new HashMap<TupleByPeriod, Map<String, List<Rateext>>>();
+
+        // Rate rows valid on THIS day: today/tomorrow from the pushed snapshot, older days fetched on demand.
+        var rateRowsForDay = _rowsProvider.rowsForDate(dRange.StartDate.toLocalDate());
 
         for (var tuple : _tuples) {
             // accumulate ALL the tuple's day-valid Rateext across its rateassigns (legacy RateList.GetAllRates).
@@ -65,7 +76,7 @@ public final class TupleRateLoader implements IRateLoader {
 
                 int openAssignment = ra.enddate == null ? 1 : 0;
                 var techPrefix = TechPrefixFor(idRatePlan);
-                var rateRows = _rateRowsByRatePlan.get(idRatePlan);
+                var rateRows = rateRowsForDay.get(idRatePlan);
                 if (rateRows == null) continue;
 
                 for (var r : rateRows) {

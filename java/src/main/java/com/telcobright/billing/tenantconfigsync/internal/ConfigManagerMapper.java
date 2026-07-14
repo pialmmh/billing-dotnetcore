@@ -18,9 +18,13 @@ import com.telcobright.billing.tenantconfigsync.internal.dto.MediationContextDto
 import com.telcobright.billing.tenantconfigsync.internal.dto.RuleRefDto;
 import com.telcobright.billing.tenantconfigsync.internal.dto.ServiceGroupConfigDto;
 import com.telcobright.billing.tenantconfigsync.internal.dto.TenantDto;
+import com.telcobright.billing.mediation.rating.ratecaching.RateCache;
+import com.telcobright.billing.mediation.rating.ratecaching.RateRowsByDateProvider;
 import com.telcobright.billing.tenantconfigsync.model.DynamicContext;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
+import com.telcobright.billing.tenantconfigsync.spi.IConfigManagerClient;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -41,6 +45,11 @@ final class ConfigManagerMapper {
     }
 
     public static Tenant ToTenant(TenantDto dto) {
+        // Back-compat (tests): no client wired -> the RateCache serves today/tomorrow but cannot back-fill.
+        return ToTenant(dto, null, RateCache.DEFAULT_MAX_DAYS);
+    }
+
+    public static Tenant ToTenant(TenantDto dto, IConfigManagerClient client, int maxDays) {
         Tenant t = new Tenant();
         t.Name = dto.Name != null ? dto.Name : "";
         t.DbName = dto.DbName != null ? dto.DbName : "";
@@ -48,12 +57,13 @@ final class ConfigManagerMapper {
         t.Children = dto.Children == null
             ? new HashMap<>()
             : dto.Children.entrySet().stream()
-                .collect(Collectors.toMap(Map.Entry::getKey, e -> ToTenant(e.getValue())));
-        t.Context = ToContext(dto.Context);
+                .collect(Collectors.toMap(Map.Entry::getKey, e -> ToTenant(e.getValue(), client, maxDays)));
+        t.Context = ToContext(dto.Context, t.DbName, client, maxDays);
         return t;
     }
 
-    private static DynamicContext ToContext(DynamicContextDto dto) {
+    private static DynamicContext ToContext(DynamicContextDto dto, String tenantDbName,
+            IConfigManagerClient client, int maxDays) {
         if (dto == null) {
             return DynamicContext.Empty;
         }
@@ -68,13 +78,27 @@ final class ConfigManagerMapper {
         ctx.PartnerIdWisePackageAccounts = dto.PartnerIdWisePackageAccounts != null
             ? new HashMap<>(dto.PartnerIdWisePackageAccounts)
             : new HashMap<>();
-        ctx.MediationContext = ToMediation(dto.MediationContext, ctx.RatePlans, ctx.RatePlanWiseTodaysRates);
+
+        // Pre-warm today + tomorrow from the pushed snapshot; the provider fetches OLDER days on demand
+        // (back-processing) via /get-rates-by-date. today/tomorrow therefore never wait on a network call.
+        // today's rows double as the fallback when no client is wired (tests) — legacy today-for-all-days.
+        LocalDate today = LocalDate.now();
+        Map<Integer, List<rate>> todayRows = ToRateRowsByRatePlan(ctx.RatePlanWiseTodaysRates);
+        Map<LocalDate, Map<Integer, List<rate>>> prewarmed = new HashMap<>();
+        prewarmed.put(today, todayRows);
+        if (dto.RatePlanWiseTomorrowsRates != null)
+            prewarmed.put(today.plusDays(1), ToRateRowsByRatePlan(dto.RatePlanWiseTomorrowsRates));
+        RateRowsByDateProvider rateRowsProvider =
+                new SnapshotBackfillRateRows(tenantDbName, prewarmed, todayRows, client);
+
+        ctx.MediationContext = ToMediation(dto.MediationContext, ctx.RatePlans, rateRowsProvider, maxDays);
         return ctx;
     }
 
     private static MediationContext ToMediation(MediationContextDto dto,
             Map<Integer, RatePlan> ratePlans,
-            Map<Integer, Map<String, Rate>> ratePlanWiseTodaysRates) {
+            RateRowsByDateProvider rateRowsProvider,
+            int maxDays) {
         Map<Integer, ServiceGroupConfiguration> sgConfigs = (dto == null || dto.ServiceGroupConfigurations == null)
             ? null
             : dto.ServiceGroupConfigurations.entrySet().stream()
@@ -83,24 +107,24 @@ final class ConfigManagerMapper {
         // The legacy JOIN, fed from config: the resolver (which plan applies) + the per-day RateCache (the
         // rates) are both built from this tenant's rate-plan-assignment tuples (each carrying its rateassign
         // JOIN rows). The RateCache loader joins tuple -> rateassign(Inactive=idRatePlan) -> rate plan -> the
-        // actual rate rows, which arrive separately on the DynamicContext as ratePlanWiseTodaysRates.
+        // actual rate rows, which come per-day from the provider (snapshot for today/tomorrow, fetched otherwise).
         List<rateplanassignmenttuple> tuples = (dto != null && dto.RatePlanAssignmentTuples != null)
             ? dto.RatePlanAssignmentTuples : List.of();
 
         Map<String, rateplan> dicRatePlan = ToDicRatePlan(ratePlans);
-        Map<Integer, List<rate>> rateRowsByRatePlan = ToRateRowsByRatePlan(ratePlanWiseTodaysRates);
         Map<String, enumbillingspan> billingSpans = ResolveBillingSpans(dto);
 
         return MediationContext.ForRating(
             tuples,
-            rateRowsByRatePlan,
+            rateRowsProvider,
             dicRatePlan,
             billingSpans,
             8,                                    // CdrSetting.MaxDecimalPrecision default
             dto != null ? dto.Categories : null,
             dto != null ? dto.ServiceGroupRules : null,
             sgConfigs,                            // null -> the built-in default SG configs
-            dto != null ? ToChecklist(dto.CommonChecklist) : null);
+            dto != null ? ToChecklist(dto.CommonChecklist) : null,
+            maxDays);
     }
 
     // ratePlans -> DicRatePlan (idrateplan as string -> engine rateplan). The served RatePlan now carries
@@ -124,7 +148,7 @@ final class ConfigManagerMapper {
 
     // ratePlanWiseTodaysRates (planId -> prefix -> served Rate) -> rateRowsByRatePlan (planId -> engine rate
     // rows), via ToEngineRate which now maps the FULL served row.
-    private static Map<Integer, List<rate>> ToRateRowsByRatePlan(Map<Integer, Map<String, Rate>> served) {
+    static Map<Integer, List<rate>> ToRateRowsByRatePlan(Map<Integer, Map<String, Rate>> served) {
         Map<Integer, List<rate>> out = new HashMap<>();
         if (served == null) return out;
         for (var planEntry : served.entrySet()) {

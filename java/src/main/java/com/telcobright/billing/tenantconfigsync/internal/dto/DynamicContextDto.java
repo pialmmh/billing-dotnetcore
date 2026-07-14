@@ -13,6 +13,8 @@ public final class DynamicContextDto {
     public Map<Integer, Partner> Partners;
     public Map<Integer, RatePlan> RatePlans;
     public Map<Integer, Map<String, Rate>> RatePlanWiseTodaysRates;
+    /** Tomorrow's rates, served alongside today's so the RateCache keeps both realtime days warm. */
+    public Map<Integer, Map<String, Rate>> RatePlanWiseTomorrowsRates;
     public List<rateassign> RateAssignsCustomer;
     public List<rateassign> RateAssignsSupplier;
     public Map<Long, List<PackageAccount>> PartnerIdWisePackageAccounts;

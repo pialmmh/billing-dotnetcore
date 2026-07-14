@@ -1,6 +1,10 @@
 package com.telcobright.billing.tenantconfigsync.spi;
 
+import com.telcobright.billing.mediation.model.Rate;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
+
+import java.time.LocalDate;
+import java.util.Map;
 
 /**
  * What this package REQUIRES to fetch config: a client to config-manager. The data side of the
@@ -20,4 +24,14 @@ public interface IConfigManagerClient {
      * mis-rate. Never returns null.
      */
     Tenant GetTenantRoot(String tenantName);
+
+    /**
+     * On-demand rates for ONE date (planId -> prefix -> served Rate), from
+     * {@code POST /get-rates-by-date?name=<tenantDbName>&date=<yyyy-MM-dd>}. The RateCache calls this to
+     * back-fill a day it does not hold (back-processing old CDRs); today/tomorrow ride the snapshot instead.
+     * Default returns empty so test fakes need not implement it; the HTTP client overrides it.
+     */
+    default Map<Integer, Map<String, Rate>> GetRatesForDate(String tenantDbName, LocalDate date) {
+        return Map.of();
+    }
 }
