@@ -13,6 +13,8 @@ import com.telcobright.billing.mediation.rating.ratecaching.PrefixMatcher;
 import com.telcobright.billing.mediation.rating.ratecaching.TupleByPeriod;
 import com.telcobright.billing.tenantconfigsync.internal.dto.DynamicContextDto;
 import com.telcobright.billing.tenantconfigsync.internal.dto.MediationContextDto;
+import com.telcobright.billing.tenantconfigsync.internal.dto.RateAssignDto;
+import com.telcobright.billing.tenantconfigsync.internal.dto.RatePlanAssignmentTupleDto;
 import com.telcobright.billing.tenantconfigsync.internal.dto.TenantDto;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
 import com.telcobright.billing.testsupport.TestData;
@@ -115,6 +117,75 @@ class ConfigManagerMapperTests {
         assertEquals(1, tuples.size());
         // the join rateassign carries the idRatePlan in its Inactive field (legacy quirk).
         assertEquals(7, tuples.get(0).rateassigns.get(0).Inactive);
+    }
+
+    // A served rate-assign carrying its tuple NESTED (config-manager's actual shape), pointing at a rate plan.
+    private static RateAssignDto servedAssign(int tupleId, int idService, int dir, Integer partner, Integer route,
+            int priority, int idRatePlan) {
+        RateAssignDto ra = new RateAssignDto();
+        ra.inactive = idRatePlan;                 // legacy: rateassign.Inactive holds the idRatePlan
+        ra.startDate = LocalDateTime.of(2000, 1, 1, 0, 0);
+        ra.endDate = null;
+        ra.ratePlan = new RateAssignDto.RatePlanRef();
+        ra.ratePlan.id = idRatePlan;
+        RatePlanAssignmentTupleDto tup = new RatePlanAssignmentTupleDto();
+        tup.id = tupleId;
+        tup.idService = idService;
+        tup.assignDirection = dir;
+        tup.idPartner = partner;
+        tup.route = route;
+        tup.priority = priority;
+        ra.ratePlanAssignmentTuple = tup;
+        return ra;
+    }
+
+    @Test
+    void nested_tuples_in_rate_assigns_are_synthesized_when_flat_list_absent() {
+        // config-manager's LIVE shape: NO flat mediationContext.ratePlanAssignmentTuples — the tuple is nested
+        // inside each served rateAssignsCustomer row (partner 78 -> plan 1, SG10 customer).
+        DynamicContextDto ctx = new DynamicContextDto();
+        ctx.MediationContext = new MediationContextDto();     // categories/tuples absent, like live
+        ctx.RateAssignsCustomer = List.of(servedAssign(1, 10, AssignmentDirection.Customer.value, 78, null, 1, 1));
+        ctx.RatePlans = Map.of(1, servedPlan(1, "Domestic Out", null));
+        ctx.RatePlanWiseTodaysRates = Map.of(1, Map.of(
+                "880", servedRate(57299, "880", 1, "0.40"),
+                "8801", servedRate(2, "8801", 1, "0.50")));
+
+        MediationContext mc = ConfigManagerMapper.ToTenant(TenantWith(ctx)).Context.MediationContext;
+
+        // the resolver now finds partner 78's synthesized tuple…
+        List<rateplanassignmenttuple> tuples = mc.RatePlanResolver.Resolve(10, AssignmentDirection.Customer.value, 78, null);
+        assertEquals(1, tuples.size());
+        assertEquals(1, tuples.get(0).id);
+        assertEquals(1, tuples.get(0).rateassigns.get(0).Inactive);   // idRatePlan via the Inactive quirk
+
+        // …and the RateCache prices the dialed number (longest prefix wins).
+        LocalDateTime answer = LocalDateTime.of(2026, 6, 17, 13, 34);
+        Rateext longest = matchedRate(mc, 10, AssignmentDirection.Customer.value, 78, "8801789896378", answer);
+        assertEquals("8801", longest.Prefix);
+        assertEquals(0, new BigDecimal("0.50").compareTo(longest.rateamount));
+
+        Rateext shorter = matchedRate(mc, 10, AssignmentDirection.Customer.value, 78, "88099999999", answer);
+        assertEquals("880", shorter.Prefix);
+        assertEquals(0, new BigDecimal("0.40").compareTo(shorter.rateamount));
+    }
+
+    @Test
+    void flat_tuples_take_precedence_over_nested_when_both_present() {
+        // if config-manager DOES serve the flat list (Fix A), use it; the nested rate-assigns are not re-synthesized.
+        MediationContextDto mediation = new MediationContextDto();
+        mediation.RatePlanAssignmentTuples = List.of(
+                TestData.joinTuple(10, AssignmentDirection.Customer.value, 5, null, 0, 7));
+
+        DynamicContextDto ctx = new DynamicContextDto();
+        ctx.MediationContext = mediation;
+        ctx.RateAssignsCustomer = List.of(servedAssign(1, 10, AssignmentDirection.Customer.value, 78, null, 1, 1));
+        ctx.RatePlans = Map.of(7, servedPlan(7, "plan7", null));
+        ctx.RatePlanWiseTodaysRates = Map.of(7, Map.of("880", servedRate(1, "880", 7, "0.35")));
+
+        MediationContext mc = ConfigManagerMapper.ToTenant(TenantWith(ctx)).Context.MediationContext;
+        assertFalse(mc.RatePlanResolver.Resolve(10, 1, 5, null).isEmpty());   // flat partner 5 present
+        assertTrue(mc.RatePlanResolver.Resolve(10, 1, 78, null).isEmpty());   // nested partner 78 NOT synthesized
     }
 
     @Test
