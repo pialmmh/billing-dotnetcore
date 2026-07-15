@@ -7,6 +7,7 @@ import com.telcobright.billing.mediation.context.ServiceGroupConfiguration;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.engine.models.enumbillingspan;
 import com.telcobright.billing.mediation.engine.models.rate;
+import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.engine.models.rateplan;
 import com.telcobright.billing.mediation.engine.models.rateplanassignmenttuple;
 import com.telcobright.billing.mediation.model.Rate;
@@ -15,6 +16,8 @@ import com.telcobright.billing.mediation.validation.IValidationRule;
 import com.telcobright.billing.mediation.validation.ValidationRuleRegistry;
 import com.telcobright.billing.tenantconfigsync.internal.dto.DynamicContextDto;
 import com.telcobright.billing.tenantconfigsync.internal.dto.MediationContextDto;
+import com.telcobright.billing.tenantconfigsync.internal.dto.RateAssignDto;
+import com.telcobright.billing.tenantconfigsync.internal.dto.RatePlanAssignmentTupleDto;
 import com.telcobright.billing.tenantconfigsync.internal.dto.RuleRefDto;
 import com.telcobright.billing.tenantconfigsync.internal.dto.ServiceGroupConfigDto;
 import com.telcobright.billing.tenantconfigsync.internal.dto.TenantDto;
@@ -28,6 +31,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -73,8 +77,8 @@ final class ConfigManagerMapper {
         ctx.RatePlanWiseTodaysRates = dto.RatePlanWiseTodaysRates != null
             ? new HashMap<>(dto.RatePlanWiseTodaysRates)
             : new HashMap<>();
-        ctx.RateAssignsCustomer = dto.RateAssignsCustomer != null ? dto.RateAssignsCustomer : List.of();
-        ctx.RateAssignsSupplier = dto.RateAssignsSupplier != null ? dto.RateAssignsSupplier : List.of();
+        ctx.RateAssignsCustomer = ToEngineRateAssigns(dto.RateAssignsCustomer);
+        ctx.RateAssignsSupplier = ToEngineRateAssigns(dto.RateAssignsSupplier);
         ctx.PartnerIdWisePackageAccounts = dto.PartnerIdWisePackageAccounts != null
             ? new HashMap<>(dto.PartnerIdWisePackageAccounts)
             : new HashMap<>();
@@ -91,14 +95,17 @@ final class ConfigManagerMapper {
         RateRowsByDateProvider rateRowsProvider =
                 new SnapshotBackfillRateRows(tenantDbName, prewarmed, todayRows, client);
 
-        ctx.MediationContext = ToMediation(dto.MediationContext, ctx.RatePlans, rateRowsProvider, maxDays);
+        ctx.MediationContext = ToMediation(dto.MediationContext, ctx.RatePlans, rateRowsProvider, maxDays,
+            dto.RateAssignsCustomer, dto.RateAssignsSupplier);
         return ctx;
     }
 
     private static MediationContext ToMediation(MediationContextDto dto,
             Map<Integer, RatePlan> ratePlans,
             RateRowsByDateProvider rateRowsProvider,
-            int maxDays) {
+            int maxDays,
+            List<RateAssignDto> rateAssignsCustomer,
+            List<RateAssignDto> rateAssignsSupplier) {
         Map<Integer, ServiceGroupConfiguration> sgConfigs = (dto == null || dto.ServiceGroupConfigurations == null)
             ? null
             : dto.ServiceGroupConfigurations.entrySet().stream()
@@ -108,8 +115,14 @@ final class ConfigManagerMapper {
         // rates) are both built from this tenant's rate-plan-assignment tuples (each carrying its rateassign
         // JOIN rows). The RateCache loader joins tuple -> rateassign(Inactive=idRatePlan) -> rate plan -> the
         // actual rate rows, which come per-day from the provider (snapshot for today/tomorrow, fetched otherwise).
-        List<rateplanassignmenttuple> tuples = (dto != null && dto.RatePlanAssignmentTuples != null)
-            ? dto.RatePlanAssignmentTuples : List.of();
+        // Two served shapes are supported: (A) the flat mediationContext.ratePlanAssignmentTuples (used when
+        // present), else (B) config-manager's ACTUAL shape today, where each served rateAssignsCustomer/Supplier
+        // row carries its tuple NESTED — group those by tuple id to rebuild the same flat list. Without (B) the
+        // resolver is empty and nothing prices. The per-day rate ROWS still come from rateRowsProvider (unchanged).
+        List<rateplanassignmenttuple> tuples = (dto != null && dto.RatePlanAssignmentTuples != null
+                && !dto.RatePlanAssignmentTuples.isEmpty())
+            ? dto.RatePlanAssignmentTuples
+            : SynthesizeTuplesFromRateAssigns(rateAssignsCustomer, rateAssignsSupplier);
 
         Map<String, rateplan> dicRatePlan = ToDicRatePlan(ratePlans);
         Map<String, enumbillingspan> billingSpans = ResolveBillingSpans(dto);
@@ -125,6 +138,64 @@ final class ConfigManagerMapper {
             sgConfigs,                            // null -> the built-in default SG configs
             dto != null ? ToChecklist(dto.CommonChecklist) : null,
             maxDays);
+    }
+
+    // Reconstruct the flat rateplanassignmenttuple list from the tuple config-manager serves NESTED in each
+    // rateAssignsCustomer/Supplier row: group the rate-assigns by ratePlanAssignmentTuple.id; each group is one
+    // tuple (its idService/direction/partner/route/priority copied verbatim), each row a join rateassign carrying
+    // the assignment's idRatePlan (in Inactive, the legacy quirk the loader reads) + date span. Yields EXACTLY
+    // the list the flat mediationContext.ratePlanAssignmentTuples would have — the resolver/RateCache do the rest.
+    static List<rateplanassignmenttuple> SynthesizeTuplesFromRateAssigns(
+            List<RateAssignDto> customer, List<RateAssignDto> supplier) {
+        Map<Integer, rateplanassignmenttuple> byTupleId = new LinkedHashMap<>();
+        AddAssignsToTuples(customer, byTupleId);
+        AddAssignsToTuples(supplier, byTupleId);
+        return new ArrayList<>(byTupleId.values());
+    }
+
+    private static void AddAssignsToTuples(List<RateAssignDto> assigns,
+            Map<Integer, rateplanassignmenttuple> byTupleId) {
+        if (assigns == null) return;
+        for (RateAssignDto ra : assigns) {
+            RatePlanAssignmentTupleDto tup = ra.ratePlanAssignmentTuple;
+            if (tup == null) continue;                        // no tuple -> this assignment can't be placed
+            rateplanassignmenttuple t = byTupleId.computeIfAbsent(tup.id, k -> {
+                rateplanassignmenttuple nt = new rateplanassignmenttuple();
+                nt.id = tup.id;
+                nt.idService = tup.idService;
+                nt.AssignDirection = tup.assignDirection;
+                nt.idpartner = tup.idPartner;
+                nt.route = tup.route;
+                nt.priority = tup.priority;
+                return nt;
+            });
+            rateassign join = new rateassign();
+            join.Prefix = tup.id;                             // legacy: rateassign.Prefix = the tuple id
+            join.Inactive = ra.idRatePlan();                  // legacy quirk: Inactive holds the idRatePlan
+            join.startdate = ra.startDate != null ? ra.startDate : MinDate;
+            join.enddate = ra.endDate;                        // null = open assignment
+            join.idrateplanassignmenttuple = tup.id;
+            t.rateassigns.add(join);
+        }
+    }
+
+    // The served rate-assign rows kept on the DynamicContext (fidelity only — NOT read by the rating path,
+    // which uses the tuples synthesized above). Project the JOIN-relevant fields into the engine rateassign.
+    private static List<rateassign> ToEngineRateAssigns(List<RateAssignDto> served) {
+        if (served == null) return List.of();
+        List<rateassign> out = new ArrayList<>(served.size());
+        for (RateAssignDto s : served) {
+            rateassign ra = new rateassign();
+            ra.Inactive = s.idRatePlan();
+            ra.startdate = s.startDate != null ? s.startDate : MinDate;
+            ra.enddate = s.endDate;
+            if (s.ratePlanAssignmentTuple != null) {
+                ra.Prefix = s.ratePlanAssignmentTuple.id;
+                ra.idrateplanassignmenttuple = s.ratePlanAssignmentTuple.id;
+            }
+            out.add(ra);
+        }
+        return out;
     }
 
     // ratePlans -> DicRatePlan (idrateplan as string -> engine rateplan). The served RatePlan now carries
