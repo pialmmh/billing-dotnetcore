@@ -66,7 +66,7 @@ class ConfigManagerLiveRateTests {
     private void walk(JsonNode json, Tenant mapped, int[] totals) {
         String db = json.path("dbName").asText("?");
         MediationContext mc = mapped.Context.MediationContext;
-        int priced = 0, total = 0;
+        int resolved = 0, priced = 0, total = 0;
         JsonNode ctx = json.path("context");
         for (String side : new String[]{"rateAssignsCustomer", "rateAssignsSupplier"}) {
             for (JsonNode ra : ctx.path(side)) {
@@ -78,11 +78,14 @@ class ConfigManagerLiveRateTests {
                 Integer partner = tup.hasNonNull("idPartner") ? tup.path("idPartner").asInt() : null;
                 Integer route = tup.hasNonNull("route") ? tup.path("route").asInt() : null;
                 List<rateplanassignmenttuple> tuples = mc.RatePlanResolver.Resolve(idService, dir, partner, route);
-                Rateext rex = priceAny(mc, tuples, "8801789896378");
-                if (rex != null) priced++;
+                if (!tuples.isEmpty()) resolved++;
+                if (priceAny(mc, tuples, "8801789896378") != null) priced++;
+                if (partner == null && route == null)
+                    System.out.printf("    [service-wide] idService=%d dir=%d -> %s%n",
+                            idService, dir, tuples.isEmpty() ? "NOT resolved" : "RESOLVED (" + tuples.size() + ")");
             }
         }
-        System.out.printf("  %-14s priced %d / %d rate-assignments%n", db, priced, total);
+        System.out.printf("  %-14s resolved %d / %d, priced %d / %d%n", db, resolved, total, priced, total);
         totals[0] += priced;
         totals[1] += total;
 

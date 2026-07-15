@@ -12,8 +12,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Rate-plan tuple resolution over the verbatim legacy tuples (legacy GetAssignmentTuples/GetRouteTuple/
- * GetPartnerTuple): route scope beats partner scope, the returned tuples are priority-ordered, and a call that
- * matches neither route nor partner resolves to EMPTY — there is NO tenant-default fallback.
+ * GetPartnerTuple + the family GetServiceTuple): route scope beats partner scope beats service-wide scope. A
+ * tuple with neither route nor partner is a SERVICE-WIDE assignment that applies to all partners of the
+ * service+direction (legacy DicServiceTuples); a partner-specific tuple still overrides it.
  */
 class RatePlanResolverTests {
     private static final int Customer = AssignmentDirection.Customer.value;
@@ -55,10 +56,27 @@ class RatePlanResolverTests {
     }
 
     @Test
-    void Tuple_with_neither_route_nor_partner_is_not_resolvable() {
-        // a non-partner/route tuple is not indexed (legacy returned null for it) — no tenant default.
-        var r = RatePlanResolver.Build(List.of(TestData.tuple(10, Customer, null, null, 0)));
-        assertTrue(r.Resolve(10, Customer, 5, null).isEmpty());
-        assertTrue(r.Resolve(10, Customer, null, null).isEmpty());
+    void Tuple_with_neither_route_nor_partner_is_service_wide() {
+        // a non-partner/route tuple is a SERVICE-WIDE assignment: applies to ALL partners of the
+        // service+direction (legacy DicServiceTuples / the family's GetServiceTuple).
+        var r = RatePlanResolver.Build(List.of(TestData.tuple(20, Supplier, null, null, 0)));
+        assertEquals(1, r.Resolve(20, Supplier, 5, null).size());     // any partner resolves it
+        assertEquals(1, r.Resolve(20, Supplier, 777, null).size());   // any other partner too
+        assertEquals(1, r.Resolve(20, Supplier, null, null).size());  // and a null-partner call
+        assertTrue(r.Resolve(20, Customer, 5, null).isEmpty());       // but NOT the other direction (scoped)
+        assertTrue(r.Resolve(21, Supplier, 5, null).isEmpty());       // NOT a different service
+    }
+
+    @Test
+    void Partner_scope_wins_over_service_wide() {
+        var r = RatePlanResolver.Build(List.of(
+                TestData.tuple(10, Customer, 5, null, 0),          // partner-specific
+                TestData.tuple(10, Customer, null, null, 0)));     // service-wide
+        // partner 5 has a specific tuple -> that one wins (not the service-wide)
+        assertEquals(5, r.Resolve(10, Customer, 5, null).get(0).idpartner);
+        // partner 6 has no specific tuple -> falls back to the service-wide one
+        var svc = r.Resolve(10, Customer, 6, null);
+        assertEquals(1, svc.size());
+        assertTrue(svc.get(0).idpartner == null || svc.get(0).idpartner == 0);
     }
 }
