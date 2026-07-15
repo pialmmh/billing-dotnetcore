@@ -13,6 +13,7 @@ import com.telcobright.billing.tenantconfigsync.dependencies.SummaryOutboxOption
 import com.telcobright.billing.tenantconfigsync.dependencies.TenantConfigSyncOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.TenantSelection;
 import com.telcobright.billing.tenantconfigsync.internal.DayBoundaryRefresher;
+import com.telcobright.billing.tenantconfigsync.internal.RateCacheGuard;
 import com.telcobright.billing.tenantconfigsync.internal.DebouncedReloader;
 import com.telcobright.billing.tenantconfigsync.internal.HttpConfigManagerClient;
 import com.telcobright.billing.tenantconfigsync.internal.TenantHierarchyLoader;
@@ -102,6 +103,12 @@ public class BillingConfig {
     @Singleton
     public DayBoundaryRefresher dayBoundaryRefresher(TenantHierarchyLoader loader) {
         return new DayBoundaryRefresher(loader);
+    }
+
+    @Produces
+    @Singleton
+    public RateCacheGuard rateCacheGuard(TenantRegistryState registry) {
+        return new RateCacheGuard(registry);
     }
 
     // --- Datasource (the post-call / batch write slice) -------------------------------------------

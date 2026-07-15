@@ -5,6 +5,7 @@ import com.telcobright.billing.tenantconfigsync.dependencies.TenantSelection;
 import com.telcobright.billing.tenantconfigsync.internal.DayBoundaryRefresher;
 import com.telcobright.billing.tenantconfigsync.internal.DebouncedReloader;
 import com.telcobright.billing.tenantconfigsync.internal.KafkaConfigEventSource;
+import com.telcobright.billing.tenantconfigsync.internal.RateCacheGuard;
 import com.telcobright.billing.tenantconfigsync.internal.TenantHierarchyLoader;
 import com.telcobright.billing.tenantconfigsync.publishes.ConfigReloadTrigger;
 import io.quarkus.runtime.StartupEvent;
@@ -30,6 +31,7 @@ public class BillingBootstrap {
     private final TenantHierarchyLoader _loader;
     private final DebouncedReloader _reloader;
     private final DayBoundaryRefresher _dayRefresher;
+    private final RateCacheGuard _rateCacheGuard;
     private final TenantConfigSyncOptions _options;
     private final TenantSelection _selection;
 
@@ -37,10 +39,12 @@ public class BillingBootstrap {
 
     @Inject
     public BillingBootstrap(TenantHierarchyLoader loader, DebouncedReloader reloader,
-            DayBoundaryRefresher dayRefresher, TenantConfigSyncOptions options, TenantSelection selection) {
+            DayBoundaryRefresher dayRefresher, RateCacheGuard rateCacheGuard,
+            TenantConfigSyncOptions options, TenantSelection selection) {
         this._loader = loader;
         this._reloader = reloader;
         this._dayRefresher = dayRefresher;
+        this._rateCacheGuard = rateCacheGuard;
         this._options = options;
         this._selection = selection;
     }
@@ -49,6 +53,7 @@ public class BillingBootstrap {
         // fail-fast: load every enabled tenant's hierarchy now (throws -> Quarkus boot fails, like .NET).
         _loader.LoadAll(ConfigReloadTrigger.Startup, null);
         _dayRefresher.Start();
+        _rateCacheGuard.Start();   // keep today+tomorrow warm per tenant (survives flush/reload/rollover)
 
         if (_options.ConfigEvents.Enabled) {
             _eventSource = new KafkaConfigEventSource(_selection, _options.ConfigEvents,
@@ -68,5 +73,6 @@ public class BillingBootstrap {
         if (_eventSource != null) _eventSource.StopAsync(new CompletableFuture<>());
         _reloader.Dispose();
         _dayRefresher.Stop();
+        _rateCacheGuard.Stop();
     }
 }

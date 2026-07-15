@@ -2,6 +2,7 @@ package com.telcobright.billing.tenantconfigsync.internal.dto;
 
 import com.telcobright.billing.mediation.model.PackageAccount;
 import com.telcobright.billing.mediation.model.Partner;
+import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.model.Rate;
 import com.telcobright.billing.mediation.model.RatePlan;
 
@@ -12,15 +13,10 @@ public final class DynamicContextDto {
     public Map<Integer, Partner> Partners;
     public Map<Integer, RatePlan> RatePlans;
     public Map<Integer, Map<String, Rate>> RatePlanWiseTodaysRates;
-
-    /**
-     * The served rate-assign rows. config-manager serves each one's rate-plan-assignment tuple NESTED (see
-     * {@link RateAssignDto}); the mapper groups them by that tuple id to reconstruct the flat
-     * {@code rateplanassignmenttuple} list the RateCache is built from (config-manager does not serve the flat
-     * {@code mediationContext.ratePlanAssignmentTuples}).
-     */
-    public List<RateAssignDto> RateAssignsCustomer;
-    public List<RateAssignDto> RateAssignsSupplier;
+    /** Tomorrow's rates, served alongside today's so the RateCache keeps both realtime days warm. */
+    public Map<Integer, Map<String, Rate>> RatePlanWiseTomorrowsRates;
+    public List<rateassign> RateAssignsCustomer;
+    public List<rateassign> RateAssignsSupplier;
     public Map<Long, List<PackageAccount>> PartnerIdWisePackageAccounts;
 
     /**

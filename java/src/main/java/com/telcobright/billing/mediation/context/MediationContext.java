@@ -8,6 +8,7 @@ import com.telcobright.billing.mediation.engine.models.rateplan;
 import com.telcobright.billing.mediation.engine.models.rateplanassignmenttuple;
 import com.telcobright.billing.mediation.rating.RatePlanResolver;
 import com.telcobright.billing.mediation.rating.ratecaching.RateCache;
+import com.telcobright.billing.mediation.rating.ratecaching.RateRowsByDateProvider;
 import com.telcobright.billing.mediation.rating.ratecaching.TupleRateLoader;
 import com.telcobright.billing.mediation.validation.IValidationRule;
 
@@ -73,6 +74,28 @@ public final class MediationContext {
             List<ServiceGroupRule> serviceGroupRules,
             Map<Integer, ServiceGroupConfiguration> serviceGroupConfigurations,
             List<IValidationRule<cdr>> commonChecklist) {
+        // Fixed today-only rate rows -> a provider that returns them for every day; default cache window.
+        return ForRating(tuples, RateRowsByDateProvider.ofFixed(rateRowsByRatePlan), dicRatePlan, billingSpans,
+                maxDecimalPrecision, categories, serviceGroupRules, serviceGroupConfigurations, commonChecklist,
+                com.telcobright.billing.mediation.rating.ratecaching.RateCache.DEFAULT_MAX_DAYS);
+    }
+
+    /**
+     * Config-fed rating context with a PER-DATE rate-row provider (today/tomorrow from the pushed snapshot,
+     * older days fetched from config-manager) and a configurable cache window ({@code maxDays}). The
+     * {@link RatePlanResolver} and {@link RateCache} are still derived from the SAME tuples so they cannot drift.
+     */
+    public static MediationContext ForRating(
+            List<rateplanassignmenttuple> tuples,
+            RateRowsByDateProvider rateRowsProvider,
+            Map<String, rateplan> dicRatePlan,
+            Map<String, enumbillingspan> billingSpans,
+            int maxDecimalPrecision,
+            Map<Integer, ServiceCategory> categories,
+            List<ServiceGroupRule> serviceGroupRules,
+            Map<Integer, ServiceGroupConfiguration> serviceGroupConfigurations,
+            List<IValidationRule<cdr>> commonChecklist,
+            int maxDays) {
         MediationContext ctx = new MediationContext();
         ctx.Categories = categories != null ? categories : new HashMap<>();
         ctx.ServiceGroupRules = serviceGroupRules != null ? serviceGroupRules : List.of();
@@ -85,7 +108,8 @@ public final class MediationContext {
         // FQN: the simple name `RatePlanResolver` would resolve to the instance field, not the type.
         ctx.RatePlanResolver = com.telcobright.billing.mediation.rating.RatePlanResolver.Build(tuples != null ? tuples : List.of());
         ctx.RateCache = new RateCache(
-                new TupleRateLoader(tuples, rateRowsByRatePlan, ctx.DicRatePlan), ctx.DicRatePlan);
+                new TupleRateLoader(tuples != null ? tuples : List.of(), rateRowsProvider, ctx.DicRatePlan),
+                ctx.DicRatePlan, maxDays);
         return ctx;
     }
 
