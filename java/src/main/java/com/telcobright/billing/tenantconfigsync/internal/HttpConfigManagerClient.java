@@ -1,10 +1,15 @@
 package com.telcobright.billing.tenantconfigsync.internal;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.deser.std.NumberDeserializers;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.telcobright.billing.mediation.model.Rate;
 import com.telcobright.billing.tenantconfigsync.dependencies.TenantConfigSyncOptions;
@@ -45,11 +50,38 @@ import java.util.Map;
  */
 public final class HttpConfigManagerClient implements IConfigManagerClient {
 
-    private static final ObjectMapper Json = JsonMapper.builder()
-        .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES)
-        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-        .addModule(new JavaTimeModule())   // rateassign rows (rateAssignsCustomer/Supplier) carry start/end dates
-        .build();
+    /**
+     * The wire mapper — shared by the client and the live-payload test so what the test proves is exactly what
+     * the client runs. config-manager's JPA entities expose bit(1) columns as JSON booleans (e.g.
+     * {@code rateassign.endPreviousRate:false}) while the 1:1-ported engine models keep the legacy Byte fields;
+     * the legacy Json.NET deserializer coerced those, and Jackson's integral deserializers never consult the
+     * Boolean coercion config — so a Byte deserializer that maps true/false -> 1/0 is registered explicitly.
+     * Without it the flat {@code mediationContext.ratePlanAssignmentTuples[].rateassigns[]} payload kills the
+     * whole tenant-root load.
+     */
+    static ObjectMapper NewWireMapper() {
+        SimpleModule legacyBits = new SimpleModule("legacy-bit1-booleans");
+        legacyBits.addDeserializer(Byte.class, new BooleanTolerantByteDeserializer());
+        return JsonMapper.builder()
+            .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES)
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+            .addModule(legacyBits)
+            .addModule(new JavaTimeModule())   // rateassign rows (rateAssignsCustomer/Supplier) carry start/end dates
+            .build();
+    }
+
+    private static final class BooleanTolerantByteDeserializer extends NumberDeserializers.ByteDeserializer {
+        BooleanTolerantByteDeserializer() { super(Byte.class, null); }
+
+        @Override
+        public Byte deserialize(JsonParser p, DeserializationContext ctxt) throws IOException {
+            if (p.hasToken(JsonToken.VALUE_TRUE)) return (byte) 1;
+            if (p.hasToken(JsonToken.VALUE_FALSE)) return (byte) 0;
+            return super.deserialize(p, ctxt);
+        }
+    }
+
+    private static final ObjectMapper Json = NewWireMapper();
 
     private final HttpClient _http;
     private final TenantConfigSyncOptions _opts;
