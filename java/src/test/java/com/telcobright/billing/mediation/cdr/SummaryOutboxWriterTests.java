@@ -40,7 +40,7 @@ class SummaryOutboxWriterTests {
 
     private static MediationContext Mediation() {
         var f = TestData.fixture();
-        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "1.0").idRatePlan(7));
         return f.mediation();
     }
 
@@ -55,7 +55,7 @@ class SummaryOutboxWriterTests {
         c.OutgoingRoute = "out";
         c.OriginatingIP = "1.1.1.1";
         c.TerminatingIP = "2.2.2.2";
-        c.TerminatingCalledNumber = called;
+        c.TerminatingCalledNumber = called; c.OriginatingCalledNumber = called;
         c.StartTime = when;
         c.AnswerTime = when;
         c.ChargingStatus = 1;

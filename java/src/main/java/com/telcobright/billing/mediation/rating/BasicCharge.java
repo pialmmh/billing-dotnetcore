@@ -146,7 +146,15 @@ public final class BasicCharge {
                     return tp;
                 })
                 .collect(Collectors.toList());
-        return new PrefixMatcher(mediation.RateCache, match.NormalizedNumber(),
+        // FAITHFUL to legacy A2ZRater (no digit rules configured): the rate is matched on the RAW dialed
+        // number — OriginatingCalledNumber for the Customer direction, TerminatingCalledNumber for the
+        // Supplier direction. The SG detector's normalized number feeds ONLY the ANS-prefix finder (legacy
+        // Execute never wrote it back to the cdr); rate-table prefixes are country-code-qualified (literal
+        // 880… rows or a plan field4 tech-prefix), so matching the normalized national form finds nothing.
+        String phoneNumber = (assignDirection == AssignmentDirection.Supplier.value)
+                ? cdr.TerminatingCalledNumber : cdr.OriginatingCalledNumber;
+        if (phoneNumber == null || phoneNumber.isEmpty()) return null;   // no number can match no prefix
+        return new PrefixMatcher(mediation.RateCache, phoneNumber,
                 category, subCategory, tups, answerTime).MatchPrefix();
     }
 

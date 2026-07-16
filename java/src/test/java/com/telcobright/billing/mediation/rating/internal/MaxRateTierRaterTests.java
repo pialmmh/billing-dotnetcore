@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class MaxRateTierRaterTests {
     private static MediationContext Sg10() {
         var f = TestData.fixture();
-        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "2.5").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "2.5").idRatePlan(7));
         return f.mediation();
     }
 

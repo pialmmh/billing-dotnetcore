@@ -24,15 +24,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class FinalizeEngineTests {
     private static MediationContext Mediation() {
         var f = TestData.fixture();
-        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "1.0").idRatePlan(7));
         return f.mediation();
     }
 
     // adds a SG10 supplier tuple (out-partner 7 @ 2.0/min) on top of the customer tuple.
     private static MediationContext MediationWithSupplier() {
         var f = TestData.fixture();
-        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
-        f.tup(10, AssignmentDirection.Supplier.value, 7, null, 0, TestData.Ra(1712, "2.0").idRatePlan(8));
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "1.0").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Supplier.value, 7, null, 0, TestData.Ra(8801712, "2.0").idRatePlan(8));
         return f.mediation();
     }
 
@@ -75,7 +75,7 @@ class FinalizeEngineTests {
         assertEquals(0, new BigDecimal("1.0").compareTo(s.Charged()));
         assertEquals(0, new BigDecimal("1.0").compareTo(s.InPartnerCost()));
         assertEquals(0, BigDecimal.ZERO.compareTo(s.PackageAmount()));
-        assertEquals("1712", s.MatchedPrefix());
+        assertEquals("8801712", s.MatchedPrefix());
         assertEquals(0, new BigDecimal("1.0").compareTo(result.TotalCharged()));
     }
 

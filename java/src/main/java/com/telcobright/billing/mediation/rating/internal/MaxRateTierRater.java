@@ -38,6 +38,9 @@ public final class MaxRateTierRater implements ITierRater {
         var thisCdr = new cdr();
         thisCdr.InPartnerId = tier.PartnerId();
         thisCdr.OriginatingCallingNumber = facts.CallingNumber();
+        // ONE dialed number in the live-call facts -> both called-number fields (the customer-direction rate
+        // matches on OriginatingCalledNumber, legacy A2ZRater).
+        thisCdr.OriginatingCalledNumber = facts.CalledNumber();
         thisCdr.TerminatingCalledNumber = facts.CalledNumber();
         thisCdr.StartTime = start;
         thisCdr.AnswerTime = start;

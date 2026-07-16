@@ -85,6 +85,9 @@ public final class FinalizeEngine {
         c.InPartnerId = tier.PartnerId();
         c.OutPartnerId = facts.OutPartnerId();
         c.OriginatingCallingNumber = facts.CallingNumber();
+        // the live-call facts carry ONE dialed number — it is both the originating and terminating called
+        // number (the rater matches the CUSTOMER rate on OriginatingCalledNumber, legacy A2ZRater).
+        c.OriginatingCalledNumber = facts.CalledNumber();
         c.TerminatingCalledNumber = facts.CalledNumber();
         c.DurationSec = BigDecimal.valueOf(facts.Billsec());
         c.SwitchId = facts.SwitchId();

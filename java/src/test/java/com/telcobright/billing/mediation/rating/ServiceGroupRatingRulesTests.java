@@ -32,7 +32,7 @@ class ServiceGroupRatingRulesTests {
         cdr c = new cdr();
         c.InPartnerId = 5;
         c.OutPartnerId = 7;
-        c.TerminatingCalledNumber = "8801712345678";
+        c.TerminatingCalledNumber = "8801712345678"; c.OriginatingCalledNumber = "8801712345678";
         c.DurationSec = BigDecimal.valueOf(60);
         c.StartTime = LocalDateTime.of(2026, 6, 19, 0, 0);
         c.AnswerTime = LocalDateTime.of(2026, 6, 19, 0, 0);
@@ -44,14 +44,14 @@ class ServiceGroupRatingRulesTests {
     // SG10 customer tuple: per-minute 1.0 for prefix 1712 (partner 5, rate plan 7).
     private static TestData.Fixture CustFixture() {
         var f = TestData.fixture();
-        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "1.0").idRatePlan(7));
         return f;
     }
 
     // …plus a SG10 supplier tuple: 2.0 for prefix 1712 (out-partner 7, rate plan 8).
     private static TestData.Fixture CustSuppFixture() {
         var f = CustFixture();
-        f.tup(10, AssignmentDirection.Supplier.value, 7, null, 0, TestData.Ra(1712, "2.0").idRatePlan(8));
+        f.tup(10, AssignmentDirection.Supplier.value, 7, null, 0, TestData.Ra(8801712, "2.0").idRatePlan(8));
         return f;
     }
 

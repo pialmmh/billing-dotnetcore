@@ -44,6 +44,7 @@ public final class CdrKafkaConsumer {
     private final Consumer<String, String> consumer;
     private final CdrEventPreprocessor preprocessor;
     private final CdrProcessor processor;
+    private final ITenantRegistry registry;
     private final CdrIngestOptions opts;
     private final Logger log;
     private final ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
@@ -54,10 +55,11 @@ public final class CdrKafkaConsumer {
     private volatile boolean running = true;
 
     private CdrKafkaConsumer(Consumer<String, String> consumer, CdrEventPreprocessor preprocessor,
-            CdrProcessor processor, CdrIngestOptions opts, Logger log) {
+            CdrProcessor processor, ITenantRegistry registry, CdrIngestOptions opts, Logger log) {
         this.consumer = consumer;
         this.preprocessor = preprocessor;
         this.processor = processor;
+        this.registry = registry;
         this.opts = opts;
         this.log = log;
     }
@@ -85,7 +87,7 @@ public final class CdrKafkaConsumer {
         Consumer<String, String> consumer = new KafkaConsumer<>(props);
         consumer.subscribe(List.of(opts.Topic));
 
-        CdrKafkaConsumer loop = new CdrKafkaConsumer(consumer, new CdrEventPreprocessor(registry), processor, opts, log);
+        CdrKafkaConsumer loop = new CdrKafkaConsumer(consumer, new CdrEventPreprocessor(registry), processor, registry, opts, log);
         loop.exec.submit(loop::run);
         log.infof("cdr ingest listening on topic '%s' (servers=%s, group=%s)",
                 opts.Topic, opts.BootstrapServers, opts.ConsumerGroup);
@@ -94,8 +96,22 @@ public final class CdrKafkaConsumer {
 
     private void run() {
         boolean warned = false;   // log a recurring consume error ONCE, not on every poll
+        boolean waitedForConfig = false;
         try {
             while (running) {
+                // HOLD OFF until the tenant registry has its first config load. Quarkus starts this bean and
+                // the TenantHierarchyLoader without a guaranteed order; polling before the registry is loaded
+                // dead-letters every record as "unknown tenant" AND commits their offsets — silent data loss
+                // (observed live 2026-07-16). Waiting costs nothing: the records stay in the topic.
+                if (!registry.IsLoaded()) {
+                    if (!waitedForConfig) {
+                        log.info("cdr ingest waiting for the first tenant-config load before consuming");
+                        waitedForConfig = true;
+                    }
+                    sleep(500);
+                    continue;
+                }
+
                 ConsumerRecords<String, String> records;
                 try {
                     records = consumer.poll(Duration.ofMillis(opts.PollMs));

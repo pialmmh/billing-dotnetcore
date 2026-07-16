@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.telcobright.billing.ingest.dto.CdrEvent;
+import com.telcobright.billing.ingest.dto.RatedCdrEnvelope;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
@@ -16,10 +17,18 @@ import java.util.Map;
 
 /**
  * The PREPROCESSOR — the pure, unit-testable piece this task adds (contract §1, §3). It turns a poll-batch of
- * Kafka {@code cdr_rated} record values (each value = a JSON <b>array</b> of {@link CdrEvent}, all tiers of ONE
- * call) into a {@link MultiTenantCdrBatch}: <b>decode → validate → map {@code CdrEvent}→{@code cdr} → group by
- * tenant → attach each tenant's registry {@link Tenant} context</b>. No IO: it only reads the in-memory
- * {@link ITenantRegistry} snapshot, so it is fully unit-testable.
+ * Kafka {@code cdr} record values into a {@link MultiTenantCdrBatch}: <b>decode → validate → map
+ * {@code CdrEvent}→{@code cdr} → group by tenant → attach each tenant's registry {@link Tenant} context</b>.
+ * No IO: it only reads the in-memory {@link ITenantRegistry} snapshot, so it is fully unit-testable.
+ *
+ * <p><b>Two wire shapes are accepted</b>, distinguished by the value's first JSON token:
+ * <ul>
+ *   <li><b>array</b> — Contract A ({@code CdrEvent[]}, all tiers of one call in one message; the PROPOSED
+ *       shape of {@code docs/cdr-kafka-ingest-contract.md} §2);</li>
+ *   <li><b>object</b> — the format routesphere's Kafka CDR sink ACTUALLY emits (observed live 2026-07-16):
+ *       {@code {"sequenceNo":N,"cdr":{...}}}, ONE tenant leg per message, adapted via
+ *       {@link RatedCdrEnvelope#ToCdrEvent()} onto the same validate/map path.</li>
+ * </ul>
  *
  * <p>Bad/unmappable records are routed to the dead-letter list (contract §3.5, §6) rather than poisoning the
  * batch. The pipeline RE-RATES on the actual duration (contract §5): the amounts carried in the event
@@ -29,7 +38,8 @@ import java.util.Map;
  * <p><b>PROPOSED wire contract (§8/§9): flagged, not guessed.</b> The mappings the architect must still ratify
  * are marked {@code // PROPOSED} inline: {@code supplierCost → OutPartnerCost}; {@code isPrepaid} 1=prepaid /
  * 2=postpaid; {@code packageAmount} as its own {@code cdr} column. Required-field validation follows §2's ✓
- * columns.
+ * columns — except {@code answerTime}, which the live sink omits on unanswered legs (FAILED/CANCELLED calls
+ * are still billing records, charged zero; the rater falls back to startTime).
  */
 public final class CdrEventPreprocessor {
 
@@ -61,8 +71,7 @@ public final class CdrEventPreprocessor {
         for (String value : recordValues) {
             List<CdrEvent> events;
             try {
-                events = JSON.readValue(value,
-                        JSON.getTypeFactory().constructCollectionType(List.class, CdrEvent.class));
+                events = Decode(value);
             } catch (Exception e) {
                 dead.add(new DeadLetteredCdr(value, "decode failed: " + e.getMessage()));
                 continue;
@@ -86,6 +95,23 @@ public final class CdrEventPreprocessor {
         return new MultiTenantCdrBatch(tenants, dead);
     }
 
+    /**
+     * Decode ONE record value by its first JSON token: {@code [} = Contract A ({@code CdrEvent[]});
+     * {@code {} = the live sink's per-leg envelope ({@code {"sequenceNo":N,"cdr":{...}}}), adapted onto
+     * {@link CdrEvent}. Throws on anything else (the caller dead-letters it).
+     */
+    private static List<CdrEvent> Decode(String value) throws Exception {
+        String trimmed = value.stripLeading();
+        if (trimmed.startsWith("[")) {
+            return JSON.readValue(value,
+                    JSON.getTypeFactory().constructCollectionType(List.class, CdrEvent.class));
+        }
+        RatedCdrEnvelope envelope = JSON.readValue(value, RatedCdrEnvelope.class);
+        if (envelope == null || envelope.cdr == null)
+            throw new IllegalArgumentException("object record has no 'cdr' payload");
+        return List.of(envelope.ToCdrEvent());
+    }
+
     /** Returns null when the event is valid, else a short reason string (goes to the dead-letter row). */
     private String Validate(CdrEvent e) {
         if (Blank(e.tenant)) return "missing tenant";
@@ -94,7 +120,8 @@ public final class CdrEventPreprocessor {
         if (Blank(e.callId)) return "missing callId";
         if (Blank(e.channelCallUuid)) return "missing channelCallUuid";
         if (e.startTime == null) return "missing startTime";
-        if (e.answerTime == null) return "missing answerTime";
+        // answerTime is OPTIONAL: the live sink omits it on unanswered legs (FAILED/CANCELLED calls are
+        // still billing records, charged zero; the rater falls back to startTime).
         if (e.endTime == null) return "missing endTime";
         if (e.durationSec == null) return "missing durationSec";
         if (Blank(e.originatingCallingNumber)) return "missing originatingCallingNumber";
@@ -123,9 +150,15 @@ public final class CdrEventPreprocessor {
         c.UniqueBillId = e.callId;
         c.ChannelCallUuid = e.channelCallUuid;           // NEW col
         c.ResellerHierarchy = e.resellerHierarchy;       // NEW col
+        // Provenance: the live cdr/cdrerror tables keep the legacy FileName NOT NULL (file mediation put the
+        // source CSV name there); Kafka-ingested records carry the topic marker instead.
+        c.FileName = "kafka:cdr";
         c.StartTime = e.startTime;
         c.AnswerTime = e.answerTime;
         c.EndTime = e.endTime;
+        // Live schema: SignalingStartTime NOT NULL and STRICT_TRANS_TABLES rejects the year-1 sentinel the
+        // model defaults to; the leg's signaling start is its startTime (routesphere emits no separate value).
+        c.SignalingStartTime = e.startTime;
         c.DurationSec = e.durationSec;                   // the pipeline RE-RATES on this
         c.OriginatingCallingNumber = e.originatingCallingNumber;
         c.TerminatingCallingNumber = e.terminatingCallingNumber;

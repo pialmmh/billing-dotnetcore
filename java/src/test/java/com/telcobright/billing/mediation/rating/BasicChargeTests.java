@@ -26,7 +26,7 @@ class BasicChargeTests {
     // SG10 customer tuple for partner 5: per-minute 1.0 for prefix 1712, rate plan 7.
     private static MediationContext Mediation() {
         var f = TestData.fixture();
-        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "1.0").idRatePlan(7));
         return f.mediation();
     }
 
@@ -40,7 +40,7 @@ class BasicChargeTests {
     void Charges_a_detected_call_end_to_end() {
         var thisCdr = new cdr();
         thisCdr.InPartnerId = 5;
-        thisCdr.TerminatingCalledNumber = "8801712345678";
+        thisCdr.TerminatingCalledNumber = "8801712345678"; thisCdr.OriginatingCalledNumber = "8801712345678";
         thisCdr.DurationSec = new BigDecimal("60");
         var chargeable = BasicCharge.Default().Compute(
                 thisCdr, AssignmentDirection.Customer, Mediation(), Partners(new Partner(5, null, 3)));
@@ -48,7 +48,7 @@ class BasicChargeTests {
         assertNotNull(chargeable);
         assertEquals(10, chargeable.servicegroup);     // retail -> SG10
         assertEquals(10, chargeable.servicefamily);    // SF10
-        assertEquals("1712", chargeable.Prefix);
+        assertEquals("8801712", chargeable.Prefix);
         assertEquals(0, new BigDecimal("60").compareTo(chargeable.Quantity));
         assertEquals(0, new BigDecimal("1.0").compareTo(chargeable.BilledAmount));
     }
@@ -57,7 +57,7 @@ class BasicChargeTests {
     void Half_minute_is_half_the_per_minute_rate() {
         var thisCdr = new cdr();
         thisCdr.InPartnerId = 5;
-        thisCdr.TerminatingCalledNumber = "8801712345678";
+        thisCdr.TerminatingCalledNumber = "8801712345678"; thisCdr.OriginatingCalledNumber = "8801712345678";
         thisCdr.DurationSec = new BigDecimal("30");
         var chargeable = BasicCharge.Default().Compute(
                 thisCdr, AssignmentDirection.Customer, Mediation(), Partners(new Partner(5, null, 3)));
@@ -70,7 +70,7 @@ class BasicChargeTests {
     void No_charge_when_service_group_not_detected() {
         var thisCdr = new cdr();
         thisCdr.InPartnerId = 5;
-        thisCdr.TerminatingCalledNumber = "8801712345678";
+        thisCdr.TerminatingCalledNumber = "8801712345678"; thisCdr.OriginatingCalledNumber = "8801712345678";
         thisCdr.DurationSec = new BigDecimal("60");
         var chargeable = BasicCharge.Default().Compute(
                 thisCdr, AssignmentDirection.Customer, Mediation(), Partners(new Partner(5, null, 1)));
@@ -81,7 +81,7 @@ class BasicChargeTests {
     void No_charge_when_no_rate_plan_assigned() {
         var thisCdr = new cdr();
         thisCdr.InPartnerId = 6;
-        thisCdr.TerminatingCalledNumber = "8801712345678";
+        thisCdr.TerminatingCalledNumber = "8801712345678"; thisCdr.OriginatingCalledNumber = "8801712345678";
         thisCdr.DurationSec = new BigDecimal("60");
         // SG10 detected (retail) but no tuple for partner 6
         var chargeable = BasicCharge.Default().Compute(
@@ -93,7 +93,7 @@ class BasicChargeTests {
     void No_charge_when_number_matches_no_rate_prefix() {
         var thisCdr = new cdr();
         thisCdr.InPartnerId = 5;
-        thisCdr.TerminatingCalledNumber = "8809999999";
+        thisCdr.TerminatingCalledNumber = "8809999999"; thisCdr.OriginatingCalledNumber = "8809999999";
         thisCdr.DurationSec = new BigDecimal("60");
         var chargeable = BasicCharge.Default().Compute(
                 thisCdr, AssignmentDirection.Customer, Mediation(), Partners(new Partner(5, null, 3)));

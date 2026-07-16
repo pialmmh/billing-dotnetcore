@@ -41,7 +41,7 @@ class CdrPipelineTests {
     // SG10 customer rating config: per-minute 1.0 for prefix 1712 (partner 5).
     private static MediationContext Mediation() {
         var f = TestData.fixture();
-        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "1.0").idRatePlan(7));
         return f.mediation();
     }
 
@@ -52,7 +52,7 @@ class CdrPipelineTests {
         cdr c = new cdr();
         c.SwitchId = 1; c.InPartnerId = 5; c.IncomingRoute = "in"; c.OutgoingRoute = "out";
         c.OriginatingIP = "1.1.1.1"; c.TerminatingIP = "2.2.2.2";
-        c.TerminatingCalledNumber = called; c.StartTime = when; c.AnswerTime = when; c.ChargingStatus = 1;
+        c.TerminatingCalledNumber = called; c.OriginatingCalledNumber = called; c.StartTime = when; c.AnswerTime = when; c.ChargingStatus = 1;
         c.DurationSec = BigDecimal.valueOf(60); c.RoundedDuration = BigDecimal.valueOf(60); c.Duration1 = BigDecimal.valueOf(60);
         c.CountryCode = "880"; c.AnsIdTerm = 42; c.MatchedPrefixSupplier = "1712";
         return c;
@@ -119,7 +119,7 @@ class CdrPipelineTests {
                 10, new ServiceGroupConfiguration(base.ServiceGroupId(), base.Disabled(), base.Rules(),
                         List.<IValidationRule<cdr>>of(new RequireCallingNumber()), base.UnansweredChecklist()));
         var medFixture = TestData.fixture();
-        medFixture.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        medFixture.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "1.0").idRatePlan(7));
         var med = medFixture.mediation(null, null, configs, null);
 
         var when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);

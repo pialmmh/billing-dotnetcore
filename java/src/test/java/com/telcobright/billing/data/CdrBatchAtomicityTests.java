@@ -90,7 +90,7 @@ class CdrBatchAtomicityTests {
 
     private static MediationContext Mediation() {
         var f = TestData.fixture();
-        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(1712, "1.0").idRatePlan(7));
+        f.tup(10, AssignmentDirection.Customer.value, 5, null, 0, TestData.Ra(8801712, "1.0").idRatePlan(7));
         return f.mediation();
     }
 
@@ -103,7 +103,7 @@ class CdrBatchAtomicityTests {
         c.OutgoingRoute = "out";
         c.OriginatingIP = "1.1.1.1";
         c.TerminatingIP = "2.2.2.2";
-        c.TerminatingCalledNumber = "8801712345678";
+        c.TerminatingCalledNumber = "8801712345678"; c.OriginatingCalledNumber = "8801712345678";
         c.OriginatingCallingNumber = "8801999000111";
         c.StartTime = when;
         c.AnswerTime = when;
