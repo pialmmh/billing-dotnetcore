@@ -212,6 +212,7 @@ final class ConfigManagerMapper {
             rp.field4 = (plan != null && plan.Field4 != null) ? plan.Field4 : "";
             rp.BillingSpan = (plan != null && plan.BillingSpan != null) ? plan.BillingSpan : "TF_min";
             rp.RateAmountRoundupDecimal = plan != null ? plan.RateAmountRoundupDecimal : null;
+            rp.Currency = plan != null ? plan.Currency : null;   // -> acc_chargeable.idBilledUom (NOT NULL live)
             dic.put(Integer.toString(e.getKey()), rp);
         }
         return dic;

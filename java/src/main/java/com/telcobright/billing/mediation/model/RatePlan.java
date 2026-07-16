@@ -23,4 +23,8 @@ public class RatePlan {
     public String Field4;
     public String BillingSpan;
     public Integer RateAmountRoundupDecimal;
+    /** Billed currency uom (served {@code currency}, e.g. "BDT") → engine {@code rateplan.Currency} →
+     *  {@code acc_chargeable.idBilledUom}, which the live schema keeps NOT NULL — without it every
+     *  chargeable INSERT fails. */
+    public String Currency;
 }
