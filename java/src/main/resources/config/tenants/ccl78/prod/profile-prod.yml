@@ -45,3 +45,13 @@ billing:
     entity-type: "cdr"
     ping-topic: "cdr_summary_ping"
     bootstrap-servers: "10.10.199.20:9092,10.10.198.20:9092,10.10.197.20:9092"   # prod Kafka (same as config-events)
+
+  # Decoupled summary ROLL-UP (outbox consumer) — folds each tenant's summary_affected rows into its
+  # sum_voice_day/hr tables (BY service group: SG10->day_03/hr_03, SG11->day_02/hr_02; TUPLE-wise), advancing a
+  # per-schema summary_offset cursor in the SAME tx. Disabled by default; flip enabled:true to fold live.
+  summary-rollup:
+    enabled: false
+    entity-type: "cdr"
+    poll-ms: 2000
+    max-rows-per-poll: 500
+    segment-size: 1000

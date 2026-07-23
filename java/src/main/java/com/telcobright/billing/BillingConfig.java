@@ -2,6 +2,7 @@ package com.telcobright.billing;
 
 import com.telcobright.billing.data.MySqlCdrBatchRunner;
 import com.telcobright.billing.data.MySqlConnectionFactory;
+import com.telcobright.billing.data.MySqlSummaryBatchRunner;
 import com.telcobright.billing.mediation.rating.BasicCharge;
 import com.telcobright.billing.mediation.rating.FinalizeEngine;
 import com.telcobright.billing.mediation.rating.MaxRateEngine;
@@ -10,6 +11,7 @@ import com.telcobright.billing.tenantconfigsync.dependencies.CdrIngestOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.DatasourceOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.ProfileConfigReader;
 import com.telcobright.billing.tenantconfigsync.dependencies.SummaryOutboxOptions;
+import com.telcobright.billing.tenantconfigsync.dependencies.SummaryRollupOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.TenantConfigSyncOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.TenantSelection;
 import com.telcobright.billing.tenantconfigsync.internal.DayBoundaryRefresher;
@@ -71,6 +73,12 @@ public class BillingConfig {
         return ProfileConfigReader.ReadCdrIngest(selection);
     }
 
+    @Produces
+    @Singleton
+    public SummaryRollupOptions summaryRollupOptions(TenantSelection selection) {
+        return ProfileConfigReader.ReadSummaryRollup(selection);
+    }
+
     // --- Tenant registry + the config-sync machinery ----------------------------------------------
     // One TenantRegistryState instance is produced; it is exposed as both ITenantRegistry (the read side
     // the handlers/CdrProcessor use) and as the concrete type the loader writes into.
@@ -122,6 +130,12 @@ public class BillingConfig {
     @Singleton
     public MySqlCdrBatchRunner cdrBatchRunner() {
         return MySqlCdrBatchRunner.Default();
+    }
+
+    @Produces
+    @Singleton
+    public MySqlSummaryBatchRunner summaryBatchRunner() {
+        return new MySqlSummaryBatchRunner();
     }
 
     // --- Rating engines (built via the engine's own factories) ------------------------------------

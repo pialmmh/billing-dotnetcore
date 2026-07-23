@@ -101,6 +101,12 @@ public final class ProfileConfigReader {
         return yaml == null ? new CdrIngestOptions() : ReadCdrIngestFromYaml(yaml);
     }
 
+    /** Reads the active profile's billing.summary-rollup block (the outbox -> sum_voice consumer switch). */
+    public static SummaryRollupOptions ReadSummaryRollup(TenantSelection selection) {
+        String yaml = loadActiveProfileYaml(selection);
+        return yaml == null ? new SummaryRollupOptions() : ReadSummaryRollupFromYaml(yaml);
+    }
+
     // ── YAML parsers (package-private, deterministic — unit-tested directly with inline YAML) ────
 
     static TenantConfigSyncOptions ReadOptionsFromYaml(String yaml) {
@@ -181,6 +187,26 @@ public final class ProfileConfigReader {
         return options;
     }
 
+    static SummaryRollupOptions ReadSummaryRollupFromYaml(String yaml) {
+        SummaryRollupOptions options = new SummaryRollupOptions();
+        BillingYaml billing = billingOf(yaml);
+        SummaryRollupYaml s = billing != null ? billing.SummaryRollup : null;
+        if (s != null) {
+            options.Enabled = s.Enabled;
+            options.EntityType = s.EntityType != null ? s.EntityType : options.EntityType;
+            if (s.PollMs > 0) {
+                options.PollMs = s.PollMs;
+            }
+            if (s.MaxRowsPerPoll > 0) {
+                options.MaxRowsPerPoll = s.MaxRowsPerPoll;
+            }
+            if (s.SegmentSize > 0) {
+                options.SegmentSize = s.SegmentSize;
+            }
+        }
+        return options;
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     /** Resolve the active (first enabled) tenant's profile YAML text: external override dir first, then the
@@ -243,6 +269,7 @@ public final class ProfileConfigReader {
         public DatasourceYaml Datasource;
         public SummaryYaml Summary;
         public CdrIngestYaml CdrIngest;
+        public SummaryRollupYaml SummaryRollup;
     }
 
     static final class CdrIngestYaml {
@@ -252,6 +279,14 @@ public final class ProfileConfigReader {
         public String ConsumerGroup;
         public String DeadLetterTopic;
         public int PollMs;
+    }
+
+    static final class SummaryRollupYaml {
+        public boolean Enabled;
+        public String EntityType;
+        public int PollMs;
+        public int MaxRowsPerPoll;
+        public int SegmentSize;
     }
 
     static final class DatasourceYaml {
