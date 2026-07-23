@@ -19,9 +19,12 @@ import com.telcobright.billing.mediation.engine.models.sum_voice_hr_03;
  * <li>SG10 -&gt; sum_voice_day_03/hr_03 (SfA2ZWithVatTax customer leg).</li>
  * <li>SG11 -&gt; sum_voice_day_02/hr_02 (SfDomOffNetInAns customer leg).</li>
  * </ul>
- * CUSTOMER leg only — the supplier/extended-leg summary fields (suppliercost, tax2, vat, anscost) need
- * those legs and stay 0. Aggregation by {@code GetTupleKey()} + the single-connection write are the
- * persistence slice (deferred); this just builds the summary object.
+ * The customer-leg fields come from the customer {@code acc_chargeable}. The supplier fields
+ * ({@code suppliercost}/{@code supplierrate}/{@code tax2}) are read off the {@code cdr}, where the SF1
+ * supplier leg stamps them under the default SG10 config — so they populate whenever a supplier rate
+ * matched (0 otherwise), NOT "always 0". Only {@code vat} ({@code cdr.ZAmount}) and SG10 {@code anscost}
+ * ({@code longDecimalAmount1}) are currently left 0 (unwired). Aggregation by {@code GetTupleKey()} + the
+ * single-connection write are the persistence slice (deferred); this just builds the summary object.
  */
 public final class CdrSummaryBuilder {
     private CdrSummaryBuilder() {}
@@ -58,7 +61,9 @@ public final class CdrSummaryBuilder {
 
         s.totalcalls = 1;
         s.connectedcalls = cdr.ConnectTime != null ? 1 : 0;
-        s.connectedcallsCC = (cdr.NERSuccess != null && cdr.NERSuccess == 1) ? 1 : 0;
+        // connectedcallsCC = "connected by cause code": CdrMediationResult defines this as
+        // Convert.ToBoolean(NERSuccess) i.e. NERSuccess != 0 (not == 1) — conform to that definition.
+        s.connectedcallsCC = (cdr.NERSuccess != null && cdr.NERSuccess != 0) ? 1 : 0;
         s.successfulcalls = cdr.ChargingStatus != null ? cdr.ChargingStatus : 0;
         s.actualduration = cdr.DurationSec;
         s.roundedduration = cdr.RoundedDuration != null ? cdr.RoundedDuration : BigDecimal.ZERO;
