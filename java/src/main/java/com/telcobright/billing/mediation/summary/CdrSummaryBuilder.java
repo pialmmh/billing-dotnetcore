@@ -94,11 +94,16 @@ public final class CdrSummaryBuilder {
             s.tax2 = cdr.Tax2 != null ? cdr.Tax2 : BigDecimal.ZERO;
             // vat (cdr.ZAmount) / longDecimalAmount1 (cdr.CostAnsIn, anscost) need the ANS extended leg — deferred.
         } else if (chargeable.servicegroup == 11) {   // SgDomOffnetIn.SetServiceGroupWiseSummaryParams (customer leg)
-            s.tup_matchedprefixcustomer = cdr.MatchedPrefixY;
             s.tup_sourceId = cdr.AnsIdOrig != null ? cdr.AnsIdOrig.toString() : null;
+            s.tup_matchedprefixsupplier = cdr.MatchedPrefixSupplier;
+            // SgIntlTransitVoice.SetChargingSummaryInCustomerDirection — the customer-leg fields come off the
+            // customer acc_chargeable, exactly as SG10. The prior MatchedPrefixY / OtherDecAmount1 / OtherAmount1
+            // reads were DEAD: the rater never writes those, so they always folded 0/null.
+            s.tup_matchedprefixcustomer = chargeable.Prefix;
+            s.tup_customerrate = chargeable.unitPriceOrCharge;
+            s.tup_customercurrency = chargeable.idBilledUom;
             s.customercost = chargeable.BilledAmount;
-            s.tup_customerrate = chargeable.OtherDecAmount1 != null ? chargeable.OtherDecAmount1 : BigDecimal.ZERO;     // legacy reads chargeable.OtherDecAmount1 (x rate)
-            s.longDecimalAmount1 = chargeable.OtherAmount1 != null ? chargeable.OtherAmount1 : BigDecimal.ZERO;       // x amount
+            s.tup_tax1currency = "BDT";
             s.tax1 = chargeable.TaxAmount1 != null ? chargeable.TaxAmount1 : BigDecimal.ZERO;
         }
     }

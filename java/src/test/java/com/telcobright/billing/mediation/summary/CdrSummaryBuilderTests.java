@@ -76,18 +76,20 @@ class CdrSummaryBuilderTests {
     @Test
     void Sg11_builds_day_02() {
         var cdr = Sg10Cdr();
-        cdr.MatchedPrefixY = "1712";
+        cdr.MatchedPrefixY = "9999";   // must now be IGNORED (was the old dead source for tup_matchedprefixcustomer)
         cdr.AnsIdOrig = 7;
         var chargeable = Sg10Chargeable();
         chargeable.servicegroup = 11;
-        chargeable.servicefamily = 11;
+        chargeable.servicefamily = 11;   // Prefix=1712, unitPriceOrCharge=1.0, idBilledUom=BDT (from Sg10Chargeable)
 
         var summary = CdrSummaryBuilder.Build(cdr, chargeable, SummaryBucket.Day);
 
         assertEquals(sum_voice_day_02.class, summary.getClass());
         assertEquals(0, new BigDecimal("1.0").compareTo(summary.customercost));
         assertEquals("7", summary.tup_sourceId);
-        assertEquals("1712", summary.tup_matchedprefixcustomer);
+        assertEquals("1712", summary.tup_matchedprefixcustomer);            // = chargeable.Prefix, not cdr.MatchedPrefixY
+        assertEquals(0, new BigDecimal("1.0").compareTo(summary.tup_customerrate)); // = chargeable.unitPriceOrCharge
+        assertEquals("BDT", summary.tup_customercurrency);                  // = chargeable.idBilledUom
     }
 
     @Test
