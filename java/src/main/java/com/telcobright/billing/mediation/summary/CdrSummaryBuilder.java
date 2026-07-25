@@ -61,9 +61,9 @@ public final class CdrSummaryBuilder {
 
         s.totalcalls = 1;
         s.connectedcalls = cdr.ConnectTime != null ? 1 : 0;
-        // connectedcallsCC = "connected by cause code": CdrMediationResult defines this as
-        // Convert.ToBoolean(NERSuccess) i.e. NERSuccess != 0 (not == 1) — conform to that definition.
-        s.connectedcallsCC = (cdr.NERSuccess != null && cdr.NERSuccess != 0) ? 1 : 0;
+        // connectedcallsCC ("connected flag"): legacy CdrSummaryFactory.CreateInstanceWithoutDate
+        // (TelcobrightVS13) uses NERSuccess == 1 — keep that exact semantic.
+        s.connectedcallsCC = (cdr.NERSuccess != null && cdr.NERSuccess == 1) ? 1 : 0;
         s.successfulcalls = cdr.ChargingStatus != null ? cdr.ChargingStatus : 0;
         s.actualduration = cdr.DurationSec;
         s.roundedduration = cdr.RoundedDuration != null ? cdr.RoundedDuration : BigDecimal.ZERO;
