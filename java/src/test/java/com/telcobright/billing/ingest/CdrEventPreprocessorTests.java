@@ -97,6 +97,8 @@ class CdrEventPreprocessorTests {
         assertEquals(0, new BigDecimal("2.055").compareTo(c.DurationSec));
         assertEquals("103.95.96.78", c.OriginatingIP);
         assertEquals("103.95.96.98", c.TerminatingIP);
+        assertEquals("103.95.96.98", c.IncomingRoute);   // = receiverIp (IP-trunk route)
+        assertEquals("103.95.96.78", c.OutgoingRoute);   // = callerIp   (IP-trunk route)
         assertEquals(1, c.InPartnerId);
         assertEquals(234, c.OutPartnerId);
         assertEquals(1, c.PrePaid);

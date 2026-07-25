@@ -144,6 +144,9 @@ class CdrEventRealSampleTests {
         assertEquals(0, new BigDecimal("2.055").compareTo(c.DurationSec));
         assertEquals("103.95.96.78", c.OriginatingIP);
         assertEquals("103.95.96.98", c.TerminatingIP);
+        assertEquals("103.95.96.98", c.IncomingRoute);   // = receiverIp (IP-trunk route)
+        assertEquals("103.95.96.78", c.OutgoingRoute);   // = callerIp   (IP-trunk route)
+        assertEquals(LocalDateTime.of(2026, 6, 17, 13, 34, 54), c.ConnectTime);   // = answerTime
         assertEquals("NORMAL_CLEARING", c.HangupCause);
         assertEquals("PCMU", c.Codec);
         assertEquals(1, c.InPartnerId);

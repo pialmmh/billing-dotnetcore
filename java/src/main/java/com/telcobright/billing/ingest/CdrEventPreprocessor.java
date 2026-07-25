@@ -155,6 +155,10 @@ public final class CdrEventPreprocessor {
         c.FileName = "kafka:cdr";
         c.StartTime = e.startTime;
         c.AnswerTime = e.answerTime;
+        // ConnectTime = AnswerTime (ops observation 2026-07-25): the moment the call connected IS the answer
+        // time. Null on unanswered/failed legs (the live sink omits answerTime there), so the summary's
+        // connectedcalls stays 0 for failed calls and 1 for answered — preserving the connected-vs-total split.
+        c.ConnectTime = e.answerTime;
         c.EndTime = e.endTime;
         // Live schema: SignalingStartTime NOT NULL and STRICT_TRANS_TABLES rejects the year-1 sentinel the
         // model defaults to; the leg's signaling start is its startTime (routesphere emits no separate value).
@@ -166,6 +170,11 @@ public final class CdrEventPreprocessor {
         c.TerminatingCalledNumber = e.terminatingCalledNumber;
         c.OriginatingIP = e.callerIp;
         c.TerminatingIP = e.receiverIp;
+        // Routes ARE the peer IPs on this IP-trunk topology (ops observation 2026-07-25): the call comes IN from
+        // the receiver side and goes OUT toward the caller side, so incomingRoute = receiverIp, outgoingRoute =
+        // callerIp. routesphere's live envelope carries no separate route strings; these were landing null.
+        c.IncomingRoute = e.receiverIp;
+        c.OutgoingRoute = e.callerIp;
         c.HangupCause = e.hangupCause;                   // NEW col
         c.Codec = e.channelReadCodecName;
         c.PDD = e.pdd;
