@@ -3,6 +3,8 @@ package com.telcobright.billing.mediation.servicegroups;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.model.Partner;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -80,5 +82,51 @@ class ServiceGroupDetectionTests {
         nullPartner.InPartnerId = null;
         nullPartner.TerminatingCalledNumber = "880171";
         assertNull(det.Detect(nullPartner, Partners()));
+    }
+
+    /**
+     * SG10 bills every CUSTOMER-side partner type, not just IOS. Derived from the tenant's own config on ccl98
+     * (verified identical on master .110): rateplanassignmenttuple joined to partner, idService=10 and
+     * AssignDirection=1 (customer) yields exactly types 3 IOS (22 partners), 4 RESELLER (1), 5 CLIENT (7),
+     * 6 PBX (2). Type 4 is the ROOT tier's customer on a multi-level reseller call.
+     */
+    @ParameterizedTest(name = "PartnerType {0} is billed by SG10")
+    @ValueSource(ints = {3, 4, 5, 6})
+    void Sg10_claims_every_customer_side_partner_type(int partnerType) {
+        cdr thisCdr = new cdr();
+        thisCdr.InPartnerId = 900;
+        thisCdr.TerminatingCalledNumber = "8801912020024";
+        thisCdr.OriginatingCallingNumber = "ignored";
+
+        var match = ServiceGroupDetection.Default().Detect(thisCdr, Partners(new Partner(900, null, partnerType)));
+
+        assertNotNull(match, "PartnerType " + partnerType + " has customer-direction SG10 tuples and must be billed");
+        assertEquals(10, match.ServiceGroupId());
+        assertEquals(10, thisCdr.ServiceGroup);
+        assertEquals("1912020024", match.NormalizedNumber());
+    }
+
+    /**
+     * Carrier/interconnect and unused types are NOT swept into SG10 — the allow-list fails CLOSED so an
+     * unrecognised type surfaces as "service group not detected" instead of being billed on the wrong plan.
+     * 1 = ICX (45 carrier partners, no customer-direction assignment), 7 = HCC (no partner uses it).
+     */
+    @ParameterizedTest(name = "PartnerType {0} is NOT billed by SG10")
+    @ValueSource(ints = {1, 7})
+    void Sg10_rejects_carrier_and_unused_partner_types(int partnerType) {
+        cdr thisCdr = new cdr();
+        thisCdr.InPartnerId = 901;
+        thisCdr.TerminatingCalledNumber = "8801912020024";
+
+        assertNull(ServiceGroupDetection.Default().Detect(thisCdr, Partners(new Partner(901, null, partnerType))));
+        assertEquals(0, thisCdr.ServiceGroup);
+    }
+
+    /** SG10 and SG11 stay mutually exclusive: ANS(2) is SG11's alone and is not in SG10's customer set. */
+    @Test
+    void Sg10_and_Sg11_partner_type_sets_do_not_overlap() {
+        assertFalse(SgDomOffnetOut.CustomerPartnerTypes.contains(SgDomOffnetIn.IcxPartnerType),
+                "ANS(2) must belong to SG11 only");
+        assertEquals(java.util.Set.of(3, 4, 5, 6), SgDomOffnetOut.CustomerPartnerTypes);
     }
 }
