@@ -186,6 +186,38 @@ class CdrEventPreprocessorTests {
     }
 
     @Test
+    void switch_id_stamped_and_charging_status_derived_from_duration() {
+        // The 2-arg ctor stamps the configured NE switch id (billing.mediation.switch-id) onto every cdr, and
+        // ChargingStatus mirrors "answered" (durationSec > 0) — which drives the summary's successfulcalls
+        // (legacy CdrSummaryFactory: successfulcalls = ChargingStatus). Both were previously left 0/null on the
+        // Kafka path, so tup_switchid folded 0 and successfulcalls folded 0 even for fully-billed calls.
+        var pre = new CdrEventPreprocessor(registryWith("res_233", "telcobright"), 7);
+
+        cdr answered = pre.Preprocess(List.of(CALL_2_TIERS)).tenants().get(0).cdrs().get(0);
+        assertEquals(7, answered.SwitchId);            // stamped from the configured NE idSwitch
+        assertEquals(1, answered.ChargingStatus);      // durationSec 2.055 > 0 -> answered/charged
+
+        // An unanswered/failed leg (durationSec 0, no answerTime) -> ChargingStatus 0 -> NOT a successful call.
+        String unanswered = """
+                [ { "tenant":"telcobright", "resellerHierarchy":"telcobright",
+                    "sequenceNo":9, "callId":"c0","channelCallUuid":"u0",
+                    "startTime":"2026-06-17 13:34:43","endTime":"2026-06-17 13:34:43",
+                    "durationSec":0.0,"originatingCallingNumber":"a","terminatingCallingNumber":"a",
+                    "originatingCalledNumber":"b","terminatingCalledNumber":"b",
+                    "inPartnerId":1,"outPartnerId":2,"callRatePerMinBDT":0.1,"inPartnerUom":"BDT",
+                    "inPartnerCost":0.0,"packageAmount":0.0 } ]
+                """;
+        cdr failed = pre.Preprocess(List.of(unanswered)).tenants().get(0).cdrs().get(0);
+        assertEquals(0, failed.ChargingStatus);        // durationSec 0 -> not counted as successful
+        assertEquals(7, failed.SwitchId);              // still stamped
+
+        // The default (1-arg) ctor leaves SwitchId 0 — unchanged behaviour for callers that don't configure it.
+        var preDefault = new CdrEventPreprocessor(registryWith("telcobright"));
+        cdr d = preDefault.Preprocess(List.of(CALL_2_TIERS)).tenants().get(0).cdrs().get(0);
+        assertEquals(0, d.SwitchId);
+    }
+
+    @Test
     void last_hierarchy_node_trims_and_handles_trailing_separators() {
         assertEquals("res_233", CdrEventPreprocessor.LastHierarchyNode("telcobright > res_233"));
         assertEquals("telcobright", CdrEventPreprocessor.LastHierarchyNode("telcobright"));

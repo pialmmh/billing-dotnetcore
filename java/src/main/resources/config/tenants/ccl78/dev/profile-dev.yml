@@ -67,6 +67,10 @@ billing:
     voice-enabled: true
     sms-enabled: false
     reseller-fanout-enabled: false                        # admin-only first slice
+    # Source switch/NE for ingested CDRs -> cdr.SwitchId -> summary tup_switchid. The routesphere Kafka feed
+    # carries no switch id and config-manager does not serve the `ne` table, so it is set here (the NE's
+    # ne.idSwitch). 0/absent leaves SwitchId 0. ccl78/telcobright admin switch = 1.
+    switch-id: 1
 
   # Decoupled summary hand-off (outbox producer) — 100% config, NO env. Outbox is the only summary model;
   # this gates the best-effort Kafka ping (the durable hand-off is the summary_affected row, always written).

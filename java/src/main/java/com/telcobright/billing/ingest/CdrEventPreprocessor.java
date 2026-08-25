@@ -53,9 +53,17 @@ public final class CdrEventPreprocessor {
     private static final String HIERARCHY_SEPARATOR = ">";
 
     private final ITenantRegistry registry;
+    /** billing.mediation.switch-id — the source NE's {@code ne.idSwitch}, stamped onto every mapped cdr so the
+     * summary's {@code tup_switchid} matches legacy. 0 = unset (the Kafka feed carries no switch id). */
+    private final int switchId;
 
     public CdrEventPreprocessor(ITenantRegistry registry) {
+        this(registry, 0);
+    }
+
+    public CdrEventPreprocessor(ITenantRegistry registry, int switchId) {
         this.registry = registry;
+        this.switchId = switchId;
     }
 
     /**
@@ -144,8 +152,9 @@ public final class CdrEventPreprocessor {
     }
 
     /** Map one validated {@link CdrEvent} onto the engine {@code cdr} (contract §2 / sample B). */
-    private static cdr Map(CdrEvent e) {
+    private cdr Map(CdrEvent e) {
         cdr c = new cdr();
+        c.SwitchId = switchId;                           // billing.mediation.switch-id (source NE idSwitch); 0 when unset
         c.SequenceNumber = e.sequenceNo;                 // idempotency key within the schema
         c.UniqueBillId = e.callId;
         c.ChannelCallUuid = e.channelCallUuid;           // NEW col
@@ -164,6 +173,11 @@ public final class CdrEventPreprocessor {
         // model defaults to; the leg's signaling start is its startTime (routesphere emits no separate value).
         c.SignalingStartTime = e.startTime;
         c.DurationSec = e.durationSec;                   // the pipeline RE-RATES on this
+        // ChargingStatus drives the summary's successfulcalls (legacy CdrSummaryFactory: successfulcalls =
+        // ChargingStatus; legacy FinalizeEngine sets it from Answered()). On the routesphere feed billsec
+        // (-> durationSec) is 0 on unanswered/failed legs, so duration > 0 IS the "answered/charged" signal.
+        // Was left null on the Kafka path -> successfulcalls always folded 0 even for fully-billed calls.
+        c.ChargingStatus = (e.durationSec != null && e.durationSec.signum() > 0) ? 1 : 0;
         c.OriginatingCallingNumber = e.originatingCallingNumber;
         c.TerminatingCallingNumber = e.terminatingCallingNumber;
         c.OriginatingCalledNumber = e.originatingCalledNumber;

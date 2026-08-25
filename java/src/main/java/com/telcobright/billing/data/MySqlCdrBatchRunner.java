@@ -9,8 +9,15 @@ import com.telcobright.billing.mediation.model.Partner;
 import com.telcobright.billing.mediation.sql.BatchSqlWriter;
 import com.telcobright.billing.mediation.sql.IAutoIncrementManager;
 
+import org.jboss.logging.Logger;
+
 import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -33,6 +40,8 @@ import java.util.Map;
  * {@code RuntimeException}, since the C# method declared no checked exceptions).</p>
  */
 public final class MySqlCdrBatchRunner {
+    private static final Logger log = Logger.getLogger(MySqlCdrBatchRunner.class);
+
     private final CdrPipeline _processor;
 
     public MySqlCdrBatchRunner(CdrPipeline processor) {
@@ -61,9 +70,18 @@ public final class MySqlCdrBatchRunner {
         AcquireLock(conn, batchLock);
         try {
             if (ids == null) ids = new MaxIdSeededAutoIncrementManager(conn);
+            // Cross-batch idempotency (T3): under the per-schema lock (so this SELECT sees the true committed
+            // state and no concurrent batch can write between the check and our insert), drop any cdr whose
+            // UniqueBillId is ALREADY billed in this schema's cdr table. A redelivered Kafka poll-batch (offsets
+            // commit only after the DB commit — at-least-once) therefore cannot double-write / double-bill.
+            // The unique index on cdr(UniqueBillId) is the hard backstop if two processes ever race past this.
+            List<cdr> toProcess = FilterAlreadyBilled(conn, cdrs);
+            int skipped = cdrs.size() - toProcess.size();
+            if (skipped > 0)
+                log.infof("idempotency: skipped %d already-billed cdr(s) in %s (redelivery)", skipped, batchLock);
             // the pipeline writes EVERYTHING through this connection-bound store — one connection, one transaction.
             var store = new MySqlExecutor(conn);
-            var batch = new CdrBatch(mediation, partners, cdrs, store, ids, segmentSize);
+            var batch = new CdrBatch(mediation, partners, toProcess, store, ids, segmentSize);
             var result = _processor.Process(batch);
             conn.commit();        // the ONE commit for the batch
             return result;
@@ -116,6 +134,45 @@ public final class MySqlCdrBatchRunner {
         } catch (SQLException ignored) {
             // best-effort: closing the session releases the lock anyway.
         }
+    }
+
+    /**
+     * Cross-batch dedup: return the cdrs whose UniqueBillId is NOT already present in this schema's cdr table
+     * (already-billed rows are dropped). Called under the tenant batch lock, so the read is race-free against
+     * other batches on the same schema. Cdrs with a null/empty UniqueBillId are always kept — they cannot be
+     * deduped, so the producer must supply the key for at-least-once safety. Only the {@code cdr} table (final
+     * bills) is checked; a previously-errored cdr may still be reprocessed (it might succeed after a config fix).
+     */
+    private static List<cdr> FilterAlreadyBilled(Connection conn, List<cdr> cdrs) {
+        var candidates = new LinkedHashSet<String>();
+        for (var c : cdrs)
+            if (c.UniqueBillId != null && !c.UniqueBillId.isEmpty()) candidates.add(c.UniqueBillId);
+        if (candidates.isEmpty()) return cdrs;
+
+        var already = new HashSet<String>();
+        var ids = new ArrayList<>(candidates);
+        final int chunk = 500;   // batches are small; keep the IN-list bounded
+        for (int i = 0; i < ids.size(); i += chunk) {
+            var slice = ids.subList(i, Math.min(i + chunk, ids.size()));
+            var sql = new StringBuilder("select UniqueBillId from cdr where UniqueBillId in (");
+            for (int j = 0; j < slice.size(); j++) sql.append(j == 0 ? "?" : ",?");
+            sql.append(")");
+            try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+                for (int j = 0; j < slice.size(); j++) ps.setString(j + 1, slice.get(j));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) already.add(rs.getString(1));
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("idempotency dedup query failed", e);
+            }
+        }
+        if (already.isEmpty()) return cdrs;
+
+        var kept = new ArrayList<cdr>(cdrs.size());
+        for (var c : cdrs)
+            if (c.UniqueBillId == null || c.UniqueBillId.isEmpty() || !already.contains(c.UniqueBillId))
+                kept.add(c);
+        return kept;
     }
 
     // Default-parameter overloads — the C# method signed `ids = null, segmentSize = DefaultSegmentSize`.

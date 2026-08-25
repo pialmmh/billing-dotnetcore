@@ -107,6 +107,13 @@ public final class ProfileConfigReader {
         return yaml == null ? new SummaryRollupOptions() : ReadSummaryRollupFromYaml(yaml);
     }
 
+    /** Reads the active profile's billing.mediation block — currently the fixed switch id (source NE's
+     * idSwitch) stamped onto every ingested cdr. */
+    public static MediationOptions ReadMediation(TenantSelection selection) {
+        String yaml = loadActiveProfileYaml(selection);
+        return yaml == null ? new MediationOptions() : ReadMediationFromYaml(yaml);
+    }
+
     // ── YAML parsers (package-private, deterministic — unit-tested directly with inline YAML) ────
 
     static TenantConfigSyncOptions ReadOptionsFromYaml(String yaml) {
@@ -207,6 +214,16 @@ public final class ProfileConfigReader {
         return options;
     }
 
+    static MediationOptions ReadMediationFromYaml(String yaml) {
+        MediationOptions options = new MediationOptions();
+        BillingYaml billing = billingOf(yaml);
+        MediationYaml m = billing != null ? billing.Mediation : null;
+        if (m != null && m.SwitchId > 0) {
+            options.SwitchId = m.SwitchId;
+        }
+        return options;
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     /** Resolve the active (first enabled) tenant's profile YAML text: external override dir first, then the
@@ -270,6 +287,11 @@ public final class ProfileConfigReader {
         public SummaryYaml Summary;
         public CdrIngestYaml CdrIngest;
         public SummaryRollupYaml SummaryRollup;
+        public MediationYaml Mediation;
+    }
+
+    static final class MediationYaml {
+        public int SwitchId;
     }
 
     static final class CdrIngestYaml {

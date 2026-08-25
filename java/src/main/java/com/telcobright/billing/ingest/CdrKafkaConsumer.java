@@ -44,6 +44,7 @@ public final class CdrKafkaConsumer {
     private final Consumer<String, String> consumer;
     private final CdrEventPreprocessor preprocessor;
     private final CdrProcessor processor;
+    private final MultiTenantCdrProcessor multiTenantProcessor;
     private final ITenantRegistry registry;
     private final CdrIngestOptions opts;
     private final Logger log;
@@ -59,6 +60,7 @@ public final class CdrKafkaConsumer {
         this.consumer = consumer;
         this.preprocessor = preprocessor;
         this.processor = processor;
+        this.multiTenantProcessor = new MultiTenantCdrProcessor(processor, log);
         this.registry = registry;
         this.opts = opts;
         this.log = log;
@@ -67,7 +69,7 @@ public final class CdrKafkaConsumer {
     /** Build the consumer, subscribe to the CDR topic, and launch the poll loop. Returns {@code null} when the
      * ingest is disabled or no broker is configured (the caller then relies on the gRPC debug entry). */
     public static CdrKafkaConsumer Start(CdrProcessor processor, ITenantRegistry registry,
-            CdrIngestOptions opts, Logger log) {
+            CdrIngestOptions opts, int switchId, Logger log) {
         if (!opts.Enabled) {
             log.info("cdr ingest disabled (billing.cdr-ingest.enabled=false) — cdrs arrive via gRPC only");
             return null;
@@ -87,7 +89,7 @@ public final class CdrKafkaConsumer {
         Consumer<String, String> consumer = new KafkaConsumer<>(props);
         consumer.subscribe(List.of(opts.Topic));
 
-        CdrKafkaConsumer loop = new CdrKafkaConsumer(consumer, new CdrEventPreprocessor(registry), processor, registry, opts, log);
+        CdrKafkaConsumer loop = new CdrKafkaConsumer(consumer, new CdrEventPreprocessor(registry, switchId), processor, registry, opts, log);
         loop.exec.submit(loop::run);
         log.infof("cdr ingest listening on topic '%s' (servers=%s, group=%s)",
                 opts.Topic, opts.BootstrapServers, opts.ConsumerGroup);
@@ -158,11 +160,10 @@ public final class CdrKafkaConsumer {
             log.warnf("cdr dead-letter [%s]: %s", d.reason(), Truncate(d.payload()));
         // TODO(T1 follow-up): republish dead-letters to opts.DeadLetterTopic instead of only logging.
 
-        for (PerTenantCdrs t : batch.tenants()) {
-            CdrProcessingResult r = processor.ProcessBatch(t.tenant(), t.cdrs());
-            if (!r.Committed())
-                throw new IllegalStateException("tenant '" + t.tenant() + "' batch not committed: " + r.Error());
-        }
+        // Write every tier of this poll-batch to its own schema (per-tenant commit + per-schema idempotency).
+        // Throws if any tenant slice did not commit, so the caller does NOT commit Kafka offsets and the
+        // poll-batch is redelivered — the already-committed tenants are then skipped by the dedup.
+        multiTenantProcessor.Process(batch);
     }
 
     private void SeekBackToBatchStart(ConsumerRecords<String, String> records) {
