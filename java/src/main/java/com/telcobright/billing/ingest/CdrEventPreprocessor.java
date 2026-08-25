@@ -85,6 +85,11 @@ public final class CdrEventPreprocessor {
                 continue;
             }
             for (CdrEvent ev : events) {
+                // The live sink omits tenantName but always sends resellerHierarchy; the target schema is its
+                // LEAF node (Validate already asserts tenant == leaf). Derive it so live legs route to their
+                // schema instead of dead-lettering as "missing tenant".
+                if (Blank(ev.tenant) && !Blank(ev.resellerHierarchy))
+                    ev.tenant = LastHierarchyNode(ev.resellerHierarchy);
                 String reason = Validate(ev);
                 if (reason != null) {
                     dead.add(new DeadLetteredCdr(Describe(ev), reason));
