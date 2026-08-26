@@ -15,6 +15,7 @@ import com.telcobright.billing.mediation.servicefamilies.IServiceFamily;
 import com.telcobright.billing.mediation.servicefamilies.SfA2Z;
 import com.telcobright.billing.mediation.servicefamilies.SfA2ZWithVatTax;
 import com.telcobright.billing.mediation.servicefamilies.SfDomOffNetInAns;
+import com.telcobright.billing.mediation.servicefamilies.SfDomOffNetOutIcx;
 import com.telcobright.billing.mediation.servicegroups.ServiceGroupDetection;
 import com.telcobright.billing.mediation.servicegroups.ServiceGroupMatch;
 
@@ -52,10 +53,21 @@ public final class BasicCharge {
         return new BasicCharge(ServiceGroupDetection.Default());
     }
 
-    // The legacy MEF service-family container, as a fixed registry: SF1 (base A2Z), SF10 (A2Z+VAT), SF11.
+    // The legacy MEF service-family container, as a fixed registry: SF1 (base A2Z), SF10 (A2Z+VAT), SF11,
+    // SF20 (SG10 ICX/ANS vendor cost).
     private static List<IServiceFamily> DefaultFamilies() {
-        return List.of(new SfA2Z(), new SfA2ZWithVatTax(), new SfDomOffNetInAns());
+        return List.of(new SfA2Z(), new SfA2ZWithVatTax(), new SfDomOffNetInAns(), new SfDomOffNetOutIcx());
     }
+
+    /** idService of the service-wide ICX/ANS cost config (legacy SfDomOffNetOutIcx.Id), resolved for SG10. */
+    private static final int IcxServiceId = 20;
+
+    /**
+     * idService of the domestic-incoming ANS customer family (legacy {@code SfDomOffNetInAns.Id} = SG11). Legacy
+     * rates it via {@code GetServiceTuple} — the SERVICE-WIDE idService=11 tuple, matched on the TERMINATING
+     * number — NOT the per-partner customer path. The chargeable is still tagged Customer.
+     */
+    private static final int DomOffNetInAnsServiceId = 11;
 
     /**
      * Run ALL of the detected service group's configured rating rules (legacy ExecuteRating) and return the
@@ -74,6 +86,20 @@ public final class BasicCharge {
                 .filter(r -> r instanceof RatingRule).map(r -> (RatingRule) r).collect(Collectors.toList())) {
             var chargeable = ChargeRule(cdr, mediation, match, rule);
             if (chargeable != null) chargeables.add(chargeable);
+        }
+
+        // ICX/ANS vendor COST leg (legacy SfDomOffNetOutIcx): every SG10 domestic-outgoing call carries a
+        // service-wide idService=20 cost, resolved independently of the SG's customer/supplier tuples and matched
+        // on the terminating number. No-op when the tenant has no idService=20 config (MatchServiceWideRate ->
+        // null), so tenants without ICX config are unaffected.
+        if (match.ServiceGroupId() == 10) {
+            IServiceFamily icxFamily = _families.get(IcxServiceId);
+            Rateext icxRate = MatchServiceWideRate(cdr, mediation, IcxServiceId, cdr.TerminatingCalledNumber);
+            if (icxFamily != null && icxRate != null) {
+                acc_chargeable icx = icxFamily.Charge(icxRate, cdr, match.ServiceGroupId(),
+                        AssignmentDirection.Supplier, mediation);
+                if (icx != null) chargeables.add(icx);
+            }
         }
         return chargeables;
     }
@@ -115,7 +141,13 @@ public final class BasicCharge {
         var family = _families.get(rule.IdServiceFamily());
         if (family == null) return null;
 
-        var rate = MatchRate(cdr, mediation, match, rule.AssignDirection());
+        // SG11 domestic-incoming ANS (legacy SfDomOffNetInAns) resolves its rate SERVICE-WIDE — the idService=11
+        // tuple with no partner/direction (legacy GetServiceTuple) — and matches on the TERMINATING number, not
+        // the per-partner customer path. Resolving it partner-keyed (dir=1) finds nothing in a prod-shaped config
+        // (no per-partner SG11 assign exists), so the leg silently drops to 0. Mirror legacy for this family only.
+        var rate = (rule.IdServiceFamily() == DomOffNetInAnsServiceId)
+                ? MatchServiceWideRate(cdr, mediation, DomOffNetInAnsServiceId, cdr.TerminatingCalledNumber)
+                : MatchRate(cdr, mediation, match, rule.AssignDirection());
         if (rate == null) return null;
 
         return family.Charge(rate, cdr, match.ServiceGroupId(), directionFromValue(rule.AssignDirection()), mediation);
@@ -156,6 +188,34 @@ public final class BasicCharge {
         if (phoneNumber == null || phoneNumber.isEmpty()) return null;   // no number can match no prefix
         return new PrefixMatcher(mediation.RateCache, phoneNumber,
                 category, subCategory, tups, answerTime).MatchPrefix();
+    }
+
+    /**
+     * Resolve a SERVICE-WIDE rate (no partner, no route) for an explicit idService — the legacy
+     * {@code GetServiceTuple} path used by the SG10 ICX cost leg (idService=20). Resolves the service-scope
+     * tuples for (idService, direction=None) and longest-prefixes {@code phoneNumber} over the RateCache.
+     * Returns null when the tenant has no such service config or the number matches no prefix.
+     */
+    private static Rateext MatchServiceWideRate(cdr cdr, MediationContext mediation, int idService, String phoneNumber) {
+        if (phoneNumber == null || phoneNumber.isEmpty()) return null;
+        var tuples = mediation.RatePlanResolver.Resolve(idService, AssignmentDirection.None.value, null, null);
+        if (tuples.isEmpty()) return null;
+
+        int category = (cdr.Category != null && cdr.Category > 0) ? cdr.Category : 1;
+        int subCategory = (cdr.SubCategory != null && cdr.SubCategory > 0) ? cdr.SubCategory : 1;
+        LocalDateTime answerTime = cdr.AnswerTime != null ? cdr.AnswerTime : cdr.StartTime;
+        var day = new DateRange(answerTime.toLocalDate().atStartOfDay(),
+                answerTime.toLocalDate().atStartOfDay().plusDays(1));
+        var tups = tuples.stream()
+                .map(t -> {
+                    TupleByPeriod tp = new TupleByPeriod();
+                    tp.IdAssignmentTuple = t.id;
+                    tp.DRange = day;
+                    tp.Priority = t.priority;
+                    return tp;
+                })
+                .collect(Collectors.toList());
+        return new PrefixMatcher(mediation.RateCache, phoneNumber, category, subCategory, tups, answerTime).MatchPrefix();
     }
 
     // C# `(AssignmentDirection)intValue` — map the legacy int direction back to the enum by its value.
