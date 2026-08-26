@@ -1,5 +1,6 @@
 package com.telcobright.billing.mediation.rating;
 
+import com.telcobright.billing.mediation.cdr.AnsPrefixFinder;
 import com.telcobright.billing.mediation.context.MediationContext;
 import com.telcobright.billing.mediation.context.RatingRule;
 import com.telcobright.billing.mediation.context.ServiceGroupConfiguration;
@@ -87,6 +88,7 @@ public final class BasicCharge {
         var match = _detection.Detect(cdr, partners);
         if (match == null) return List.of();
         cdr.ServiceGroup = match.ServiceGroupId();   // stamp the detected SG (legacy serviceGroup.Execute)
+        StampAnsOperator(cdr, mediation);            // ANS operator ids from partnerprefix (legacy AnsPrefixFinder)
 
         // SG15 international-outgoing (00…): rated by its OWN service-wide Xyz-ICX pass — it carries no
         // customer/supplier RatingRule config (one common idService=7 plan), so it never enters the rule loop.
@@ -192,6 +194,21 @@ public final class BasicCharge {
                 cdr.OriginatingCalledNumber, cdr.MatchedPrefixY, rate.rateamount, cdr.RoundedDuration,
                 cdr.XAmount, cdr.YAmount, cdr.UsdRateY, cdr.ZAmount, c != null ? c.BilledAmount : null, cdr.Tax2);
         return c != null ? List.of(c) : List.of();
+    }
+
+    /**
+     * Stamp the ANS operator ids from the tenant's partnerprefix (legacy {@code AnsPrefixFinder}, which each
+     * SG's detection ran): {@code AnsIdTerm}/{@code AnsPrefixTerm} from the terminating (called) number,
+     * {@code AnsIdOrig}/{@code AnsPrefixOrig} from the originating (calling) number. FALLBACK only — the Kafka
+     * ingest path already carries these off the envelope, so we fill only what is unset (the finalize/multi-tier
+     * path builds the cdr without an envelope). No-op when the tenant serves no partnerprefix.
+     */
+    private static void StampAnsOperator(cdr cdr, MediationContext mediation) {
+        if (mediation.AnsPrefixes == null || mediation.AnsPrefixes.isEmpty()) return;
+        if (cdr.AnsIdTerm == null && cdr.TerminatingCalledNumber != null)
+            AnsPrefixFinder.FindTerminatingAnsPrefix(cdr, mediation.AnsPrefixes, cdr.TerminatingCalledNumber);
+        if (cdr.AnsIdOrig == null && cdr.OriginatingCallingNumber != null)
+            AnsPrefixFinder.FindOriginatingAnsPrefix(cdr, mediation.AnsPrefixes, cdr.OriginatingCallingNumber);
     }
 
     // One rating rule: resolve the family, look the rate up through the RateCache for the rule's direction,

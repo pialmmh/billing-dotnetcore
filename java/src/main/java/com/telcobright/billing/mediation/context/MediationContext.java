@@ -61,6 +61,13 @@ public final class MediationContext {
     public int MaxDecimalPrecision = 8;
 
     /**
+     * legacy {@code MediationContext.AnsPrefixes} — the tenant's {@code partnerprefix} table folded to
+     * {@code prefix -> idPartner} (served as {@code prefixWisePartnerPrefixes}). Used by {@code AnsPrefixFinder}
+     * to stamp the ANS operator id on the cdr (AnsIdOrig/AnsIdTerm). Empty when the tenant serves no partnerprefix.
+     */
+    public Map<String, Integer> AnsPrefixes = new HashMap<>();
+
+    /**
      * legacy {@code uom_conversion_dated} (USD→BDT) folded to a monthly map: key {@code "yyyy-MM"} → the
      * CONVERSION_FACTOR effective that month. Read ONLY by the SG15 Xyz leg (USD-denominated supplier cost).
      * Empty for tenants without international-outgoing config.

@@ -63,7 +63,30 @@ final class ConfigManagerMapper {
             : dto.Children.entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, e -> ToTenant(e.getValue(), client, maxDays)));
         t.Context = ToContext(dto.Context, t.DbName, client, maxDays);
+        // The ANS partnerprefix (the operator's national numbering plan) is served only at the operator/root
+        // context; reseller tiers carry none. Inherit it down so the finalize/multi-tier path can stamp the ANS
+        // operator ids (AnsIdOrig/Term) on reseller cdrs. Each descendant lacking its own inherits the nearest
+        // ancestor that has one.
+        InheritAnsPrefixes(t);
         return t;
+    }
+
+    /** Push this tenant's AnsPrefixes into every descendant that has none (nearest non-empty ancestor wins). */
+    private static void InheritAnsPrefixes(Tenant t) {
+        Map<String, Integer> ans = (t.Context != null && t.Context.MediationContext != null)
+                ? t.Context.MediationContext.AnsPrefixes : null;
+        if (ans == null || ans.isEmpty() || t.Children == null) return;
+        for (Tenant child : t.Children.values()) FillAnsPrefixesIfEmpty(child, ans);
+    }
+
+    private static void FillAnsPrefixesIfEmpty(Tenant t, Map<String, Integer> fromAncestor) {
+        Map<String, Integer> effective = fromAncestor;
+        if (t.Context != null && t.Context.MediationContext != null) {
+            Map<String, Integer> own = t.Context.MediationContext.AnsPrefixes;
+            if (own == null || own.isEmpty()) t.Context.MediationContext.AnsPrefixes = fromAncestor;
+            else effective = own;   // this tier has its own -> its descendants inherit THIS, not the root's
+        }
+        if (t.Children != null) for (Tenant child : t.Children.values()) FillAnsPrefixesIfEmpty(child, effective);
     }
 
     private static DynamicContext ToContext(DynamicContextDto dto, String tenantDbName,
@@ -97,6 +120,14 @@ final class ConfigManagerMapper {
 
         ctx.MediationContext = ToMediation(dto.MediationContext, ctx.RatePlans, rateRowsProvider, maxDays,
             dto.RateAssignsCustomer, dto.RateAssignsSupplier);
+        // partnerprefix (prefix -> idPartner) for AnsPrefixFinder — the ANS operator id stamping (AnsIdOrig/Term).
+        if (dto.PrefixWisePartnerPrefixes != null) {
+            Map<String, Integer> ansPrefixes = new HashMap<>();
+            dto.PrefixWisePartnerPrefixes.forEach((prefix, pp) -> {
+                if (pp != null && pp.idPartner != null) ansPrefixes.put(prefix, pp.idPartner);
+            });
+            ctx.MediationContext.AnsPrefixes = ansPrefixes;
+        }
         return ctx;
     }
 

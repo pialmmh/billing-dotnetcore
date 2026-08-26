@@ -28,6 +28,13 @@ public final class DynamicContextDto {
     public Map<Long, List<PackageAccount>> PartnerIdWisePackageAccounts;
 
     /**
+     * The tenant's {@code partnerprefix} table (prefix string -> {@link PartnerPrefixDto}). Folded to
+     * {@code MediationContext.AnsPrefixes} (prefix -> idPartner) so {@code AnsPrefixFinder} can stamp the ANS
+     * operator id (AnsIdOrig/AnsIdTerm) on cdrs whose ingest envelope did not carry it (the finalize path).
+     */
+    public Map<String, PartnerPrefixDto> PrefixWisePartnerPrefixes;
+
+    /**
      * The rating-side config folded in. May be absent until config-manager serves it
      * (open item: the shared EnumServiceCategory namespace) — then MediationContext stays Empty.
      */
