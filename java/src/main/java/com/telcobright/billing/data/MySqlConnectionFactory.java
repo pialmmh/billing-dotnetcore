@@ -36,7 +36,12 @@ public final class MySqlConnectionFactory {
 
     /** Open a connection to the given schema (the tenant dbName) on the datasource. */
     public Connection Open(String database) {
-        var url = "jdbc:mysql://" + _host + ":" + _port + "/" + database;
+        // allowMultiQueries=true: the summary roll-up flushes a segment of N ';'-separated UPDATE/DELETE
+        // statements through one Statement.executeUpdate (BatchSqlWriter.WriteStatementsInSegments). MySQL
+        // Connector/J rejects batched statements unless this flag is set (C#'s MySqlConnector tolerated it),
+        // which is what threw "SQLSyntaxError ... near 'update sum_voice_hr_03 set ...'". The CDR batch path
+        // (single multi-row INSERTs) is unaffected by the flag.
+        var url = "jdbc:mysql://" + _host + ":" + _port + "/" + database + "?allowMultiQueries=true";
         try {
             return DriverManager.getConnection(url, _user, _password);
         } catch (SQLException e) {
