@@ -12,6 +12,8 @@ import com.telcobright.billing.mediation.rating.ratecaching.RateRowsByDateProvid
 import com.telcobright.billing.mediation.rating.ratecaching.TupleRateLoader;
 import com.telcobright.billing.mediation.validation.IValidationRule;
 
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,6 +59,30 @@ public final class MediationContext {
 
     /** legacy CdrSetting.MaxDecimalPrecision — the HALF_EVEN rounding scale for the final amount (default 8). */
     public int MaxDecimalPrecision = 8;
+
+    /**
+     * legacy {@code uom_conversion_dated} (USD→BDT) folded to a monthly map: key {@code "yyyy-MM"} → the
+     * CONVERSION_FACTOR effective that month. Read ONLY by the SG15 Xyz leg (USD-denominated supplier cost).
+     * Empty for tenants without international-outgoing config.
+     */
+    public Map<String, BigDecimal> UsdToBdtByMonth = new HashMap<>();
+
+    /**
+     * USD→BDT for a call's month: exact {@code "yyyy-MM"} match, else the nearest EARLIER month present (legacy
+     * {@code GetExactOrNearestEarlierConvRateForXyz}). Returns null when no conversion is known — the caller
+     * (SfXyzIcx) MUST fail loudly rather than treat a missing rate as free USD.
+     */
+    public BigDecimal UsdToBdtForMonth(LocalDateTime when) {
+        if (when == null || UsdToBdtByMonth.isEmpty()) return null;
+        String key = String.format("%04d-%02d", when.getYear(), when.getMonthValue());
+        BigDecimal exact = UsdToBdtByMonth.get(key);
+        if (exact != null) return exact;
+        String best = null;
+        for (String k : UsdToBdtByMonth.keySet()) {
+            if (k.compareTo(key) <= 0 && (best == null || k.compareTo(best) > 0)) best = k;
+        }
+        return best != null ? UsdToBdtByMonth.get(best) : null;
+    }
 
     /**
      * Builds a rating context from one tenant's legacy {@code rateplanassignmenttuple}s (each carrying its

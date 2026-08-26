@@ -22,13 +22,17 @@ public final class ServiceGroupDetection {
 
     public ServiceGroupDetection(List<IServiceGroupDetector> detectors) {
         this._detectors = detectors.stream()
-                .sorted(Comparator.comparingInt(IServiceGroupDetector::Id))
+                .sorted(Comparator.comparingInt(IServiceGroupDetector::DetectionPriority))
                 .collect(Collectors.toList());
     }
 
-    /** The SG10 + SG11 detection pair — the ready instance for tests and the rating flow. */
+    /**
+     * The default detection set: SG15 international-outgoing (evaluated FIRST via DetectionPriority so a {@code 00…}
+     * call cannot fall into SG10), then SG10 outgoing and SG11 incoming. SG15 only claims {@code 00…} destinations,
+     * so registering it universally does not disturb SG10/SG11 for domestic traffic.
+     */
     public static ServiceGroupDetection Default() {
-        return new ServiceGroupDetection(List.of(new SgDomOffnetOut(), new SgDomOffnetIn()));
+        return new ServiceGroupDetection(List.of(new SgIntlOutIptsp(), new SgDomOffnetOut(), new SgDomOffnetIn()));
     }
 
     public ServiceGroupMatch Detect(cdr cdr, Map<Integer, Partner> partners) {

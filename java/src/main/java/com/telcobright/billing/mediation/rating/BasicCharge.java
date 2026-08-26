@@ -16,6 +16,7 @@ import com.telcobright.billing.mediation.servicefamilies.SfA2Z;
 import com.telcobright.billing.mediation.servicefamilies.SfA2ZWithVatTax;
 import com.telcobright.billing.mediation.servicefamilies.SfDomOffNetInAns;
 import com.telcobright.billing.mediation.servicefamilies.SfDomOffNetOutIcx;
+import com.telcobright.billing.mediation.servicefamilies.SfXyzIcx;
 import com.telcobright.billing.mediation.servicegroups.ServiceGroupDetection;
 import com.telcobright.billing.mediation.servicegroups.ServiceGroupMatch;
 
@@ -56,7 +57,8 @@ public final class BasicCharge {
     // The legacy MEF service-family container, as a fixed registry: SF1 (base A2Z), SF10 (A2Z+VAT), SF11,
     // SF20 (SG10 ICX/ANS vendor cost).
     private static List<IServiceFamily> DefaultFamilies() {
-        return List.of(new SfA2Z(), new SfA2ZWithVatTax(), new SfDomOffNetInAns(), new SfDomOffNetOutIcx());
+        return List.of(new SfA2Z(), new SfA2ZWithVatTax(), new SfDomOffNetInAns(), new SfDomOffNetOutIcx(),
+                new SfXyzIcx());
     }
 
     /** idService of the service-wide ICX/ANS cost config (legacy SfDomOffNetOutIcx.Id), resolved for SG10. */
@@ -69,6 +71,13 @@ public final class BasicCharge {
      */
     private static final int DomOffNetInAnsServiceId = 11;
 
+    private static final org.jboss.logging.Logger LOG = org.jboss.logging.Logger.getLogger(BasicCharge.class);
+
+    /** SG 15 — international outgoing (00…). Rated by the service-wide Xyz-ICX plan, not the SG-rule loop. */
+    private static final int IntlOutIptspServiceGroup = 15;
+    /** idService of the ONE common international-outgoing Xyz plan (legacy {@code SfXyzIcx.Id}=7, plan 117). */
+    private static final int XyzIcxServiceId = 7;
+
     /**
      * Run ALL of the detected service group's configured rating rules (legacy ExecuteRating) and return the
      * resulting chargeables (one per rule that matched a rate). Empty if no SG is detected, the SG is
@@ -78,6 +87,13 @@ public final class BasicCharge {
         var match = _detection.Detect(cdr, partners);
         if (match == null) return List.of();
         cdr.ServiceGroup = match.ServiceGroupId();   // stamp the detected SG (legacy serviceGroup.Execute)
+
+        // SG15 international-outgoing (00…): rated by its OWN service-wide Xyz-ICX pass — it carries no
+        // customer/supplier RatingRule config (one common idService=7 plan), so it never enters the rule loop.
+        if (match.ServiceGroupId() == IntlOutIptspServiceGroup) {
+            return RateIntlOut(cdr, mediation, match);
+        }
+
         ServiceGroupConfiguration sgConfig = mediation.ServiceGroupConfigurations.get(match.ServiceGroupId());
         if (sgConfig == null || sgConfig.Disabled()) return List.of();
 
@@ -135,6 +151,49 @@ public final class BasicCharge {
         return new MatchCustomerRateResult(match.ServiceGroupId(), rate);
     }
 
+    /**
+     * SG15 international-outgoing rating. Resolves the ONE common Xyz-ICX plan SERVICE-WIDE (idService=7) on the
+     * {@code 00}-stripped destination and charges {@link SfXyzIcx}. A FAILED / 0-duration call stays classified
+     * SG15 but produces no chargeable (legacy: XyzRuleHelper builds a chargeable only when ChargingStatus==1) —
+     * zero financial impact. An ANSWERED call with no international rate (or a missing USD conversion, thrown by
+     * the family) FAILS LOUD so the call lands in cdrerror — it is never silently zero-billed.
+     */
+    private List<acc_chargeable> RateIntlOut(cdr cdr, MediationContext mediation, ServiceGroupMatch match) {
+        boolean answered = cdr.ChargingStatus != null && cdr.ChargingStatus == 1
+                && cdr.DurationSec != null && cdr.DurationSec.signum() > 0;
+
+        IServiceFamily xyz = _families.get(XyzIcxServiceId);
+        if (xyz == null) {
+            if (answered) throw new IllegalStateException(
+                    "SG15 answered call but the Xyz-ICX family (idService=7) is not registered — uniqueBillId="
+                    + cdr.UniqueBillId);
+            return List.of();
+        }
+
+        Rateext rate = MatchServiceWideRate(cdr, mediation, XyzIcxServiceId, match.NormalizedNumber());
+        if (rate == null) {
+            if (answered) {
+                throw new IllegalStateException("SG15 answered international call has NO rate (idService=7) for dest="
+                        + cdr.OriginatingCalledNumber + " (stripped=" + match.NormalizedNumber() + ", uniqueBillId="
+                        + cdr.UniqueBillId + ") — the Outgoing XYZ international plan is missing/incomplete");
+            }
+            LOG.debugf("SG15 failed call (no charge, no rate needed): dest=%s uniqueBillId=%s",
+                    cdr.OriginatingCalledNumber, cdr.UniqueBillId);
+            return List.of();
+        }
+        if (!answered) {
+            LOG.debugf("SG15 failed call classified but not charged (ChargingStatus=%s dur=%s) dest=%s",
+                    cdr.ChargingStatus, cdr.DurationSec, cdr.OriginatingCalledNumber);
+            return List.of();
+        }
+
+        acc_chargeable c = xyz.Charge(rate, cdr, IntlOutIptspServiceGroup, AssignmentDirection.Customer, mediation);
+        LOG.infof("SG15 rated: dest=%s prefix=%s xRate=%s dur=%s X=%s Y(USD)=%s usdRate=%s Z=%s billed=%s tax2=%s",
+                cdr.OriginatingCalledNumber, cdr.MatchedPrefixY, rate.rateamount, cdr.RoundedDuration,
+                cdr.XAmount, cdr.YAmount, cdr.UsdRateY, cdr.ZAmount, c != null ? c.BilledAmount : null, cdr.Tax2);
+        return c != null ? List.of(c) : List.of();
+    }
+
     // One rating rule: resolve the family, look the rate up through the RateCache for the rule's direction,
     // and charge. The legacy A2ZRater path, per rule.
     private acc_chargeable ChargeRule(cdr cdr, MediationContext mediation, ServiceGroupMatch match, RatingRule rule) {
@@ -144,8 +203,10 @@ public final class BasicCharge {
         // SG11 domestic-incoming ANS (legacy SfDomOffNetInAns) resolves its rate SERVICE-WIDE — the idService=11
         // tuple with no partner/direction (legacy GetServiceTuple) — and matches on the TERMINATING number, not
         // the per-partner customer path. Resolving it partner-keyed (dir=1) finds nothing in a prod-shaped config
-        // (no per-partner SG11 assign exists), so the leg silently drops to 0. Mirror legacy for this family only.
-        var rate = (rule.IdServiceFamily() == DomOffNetInAnsServiceId)
+        // (no per-partner SG11 assign exists), so the leg silently drops to 0. Gate on the SG actually being SG11
+        // (not merely family 11), so a config that plugs SF11 into another SG keeps the normal partner-keyed path.
+        var rate = (match.ServiceGroupId() == DomOffNetInAnsServiceId
+                        && rule.IdServiceFamily() == DomOffNetInAnsServiceId)
                 ? MatchServiceWideRate(cdr, mediation, DomOffNetInAnsServiceId, cdr.TerminatingCalledNumber)
                 : MatchRate(cdr, mediation, match, rule.AssignDirection());
         if (rate == null) return null;

@@ -8,8 +8,10 @@ import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_02;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_03;
+import com.telcobright.billing.mediation.engine.models.sum_voice_day_05;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_02;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_03;
+import com.telcobright.billing.mediation.engine.models.sum_voice_hr_05;
 
 /**
  * Builds a per-call AbstractCdrSummary from the cdr + its customer acc_chargeable — the port of legacy
@@ -46,6 +48,10 @@ public final class CdrSummaryBuilder {
         if (serviceGroup == 10 && bucket == SummaryBucket.Hour) return new sum_voice_hr_03();
         if (serviceGroup == 11 && bucket == SummaryBucket.Day) return new sum_voice_day_02();
         if (serviceGroup == 11 && bucket == SummaryBucket.Hour) return new sum_voice_hr_02();
+        // SG15 international-outgoing → sum_voice_*_05 (verified against production telcobright.sum_voice_day_05 /
+        // sum_voice_hr_05; the stale legacy source said _02, the live data is _05).
+        if (serviceGroup == 15 && bucket == SummaryBucket.Day) return new sum_voice_day_05();
+        if (serviceGroup == 15 && bucket == SummaryBucket.Hour) return new sum_voice_hr_05();
         throw new UnsupportedOperationException("No summary table mapped for service group " + serviceGroup + ".");
     }
 
@@ -105,6 +111,22 @@ public final class CdrSummaryBuilder {
             s.customercost = chargeable.BilledAmount;
             s.tup_tax1currency = "BDT";
             s.tax1 = chargeable.TaxAmount1 != null ? chargeable.TaxAmount1 : BigDecimal.ZERO;
+        } else if (chargeable.servicegroup == 15) {   // SgIntlOutIptsp.SetServiceGroupWiseSummaryParams (Xyz customer leg)
+            // legacy field mapping: invoice -> customercost; x/y/z amounts -> longDecimalAmount1/2/3; the
+            // x-rate / y-rate(USD) / usd-rate ride on OtherDecAmount1/2/3; btrc -> tax1. SG15 has no separate
+            // supplier chargeable (supplier cost is the embedded y component), so no supplier-leg reads here.
+            s.tup_sourceId = cdr.AnsIdOrig != null ? cdr.AnsIdOrig.toString() : null;
+            s.tup_matchedprefixcustomer = cdr.MatchedPrefixY;
+            s.customercost = chargeable.BilledAmount != null ? chargeable.BilledAmount : BigDecimal.ZERO;
+            s.tup_customerrate = chargeable.OtherDecAmount1 != null ? chargeable.OtherDecAmount1 : BigDecimal.ZERO;   // x rate
+            s.tup_supplierrate = chargeable.OtherDecAmount2 != null ? chargeable.OtherDecAmount2 : BigDecimal.ZERO;   // y rate (USD)
+            s.tup_customercurrency = chargeable.OtherDecAmount3 != null ? chargeable.OtherDecAmount3.toString() : null; // usd rate
+            s.tup_suppliercurrency = "USD";
+            s.longDecimalAmount1 = chargeable.OtherAmount1 != null ? chargeable.OtherAmount1 : BigDecimal.ZERO;       // x amount (BDT)
+            s.longDecimalAmount2 = chargeable.OtherAmount2 != null ? chargeable.OtherAmount2 : BigDecimal.ZERO;       // y amount (USD)
+            s.longDecimalAmount3 = chargeable.OtherAmount3 != null ? chargeable.OtherAmount3 : BigDecimal.ZERO;       // z amount (BDT)
+            s.tup_tax1currency = "BDT";
+            s.tax1 = chargeable.TaxAmount1 != null ? chargeable.TaxAmount1 : BigDecimal.ZERO;                        // btrc rev-share
         }
     }
 

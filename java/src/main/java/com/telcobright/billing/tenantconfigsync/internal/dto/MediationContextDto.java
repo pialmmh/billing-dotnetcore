@@ -4,12 +4,19 @@ import com.telcobright.billing.mediation.context.ServiceCategory;
 import com.telcobright.billing.mediation.context.ServiceGroupRule;
 import com.telcobright.billing.mediation.engine.models.rateplanassignmenttuple;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
 public final class MediationContextDto {
     public Map<Integer, ServiceCategory> Categories;
     public List<ServiceGroupRule> ServiceGroupRules;
+
+    /**
+     * legacy {@code uom_conversion_dated} (USD→BDT) folded to {@code "yyyy-MM"} → CONVERSION_FACTOR, served for
+     * tenants that carry SG15 international-outgoing (Xyz) config. Absent (null) for domestic-only tenants.
+     */
+    public Map<String, BigDecimal> UsdConversionsByMonth;
 
     /**
      * The verbatim legacy rate-plan-assignment tuples (idService + AssignDirection +

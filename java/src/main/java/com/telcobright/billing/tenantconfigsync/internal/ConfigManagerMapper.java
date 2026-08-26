@@ -127,7 +127,7 @@ final class ConfigManagerMapper {
         Map<String, rateplan> dicRatePlan = ToDicRatePlan(ratePlans);
         Map<String, enumbillingspan> billingSpans = ResolveBillingSpans(dto);
 
-        return MediationContext.ForRating(
+        MediationContext med = MediationContext.ForRating(
             tuples,
             rateRowsProvider,
             dicRatePlan,
@@ -138,6 +138,9 @@ final class ConfigManagerMapper {
             sgConfigs,                            // null -> the built-in default SG configs
             dto != null ? ToChecklist(dto.CommonChecklist) : null,
             maxDays);
+        // USD→BDT monthly conversions for the SG15 Xyz leg (absent for domestic-only tenants).
+        if (dto != null && dto.UsdConversionsByMonth != null) med.UsdToBdtByMonth = dto.UsdConversionsByMonth;
+        return med;
     }
 
     // Reconstruct the flat rateplanassignmenttuple list from the tuple config-manager serves NESTED in each

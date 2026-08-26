@@ -30,7 +30,9 @@ public final class CdrSummaryContext {
     // Service group -> its summary target tables (legacy IServiceGroup.GetSummaryTargetTables).
     private static final Map<Integer, CdrSummaryType[]> ServiceGroupTargetTables = Map.of(
             10, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_03, CdrSummaryType.sum_voice_hr_03 },
-            11, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_02, CdrSummaryType.sum_voice_hr_02 });
+            11, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_02, CdrSummaryType.sum_voice_hr_02 },
+            // SG15 international-outgoing → sum_voice_*_05 (verified against production; legacy source said _02).
+            15, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_05, CdrSummaryType.sum_voice_hr_05 });
 
     private final ISummaryStore _store;
     private final IAutoIncrementManager _ids;

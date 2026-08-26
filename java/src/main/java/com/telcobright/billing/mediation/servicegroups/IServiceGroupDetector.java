@@ -19,4 +19,12 @@ public interface IServiceGroupDetector {
     int Id();
     String RuleName();
     ServiceGroupMatch Detect(cdr cdr, Map<Integer, Partner> partners);
+
+    /**
+     * Evaluation order within {@link ServiceGroupDetection} (lower runs first). Defaults to {@link #Id()} so the
+     * legacy "first enabled SG that claims the call wins" is preserved by ascending id. A detector overrides this
+     * only when it must be checked ahead of a lower-id one — e.g. SG15 international-outgoing must precede SG10,
+     * which would otherwise capture the same call on partner type alone.
+     */
+    default int DetectionPriority() { return Id(); }
 }
