@@ -35,6 +35,12 @@ service RatingService {
   // (CdrProcessor.Process via MySqlCdrBatchRunner) and writes cdr + acc_chargeable + summaries (+ cdrerror)
   // to that tenant's schema in ONE transaction — all-or-nothing.
   rpc ProcessCdrBatch (CdrBatchRequest) returns (CdrBatchResult);
+
+  // RECOVERY — reprocess a tenant's cdrerror rows: read them back, re-rate through the SAME pipeline, and
+  // ATOMICALLY move the ones that now rate into cdr (+ chargeable + summary) while deleting their source error
+  // rows (one transaction, all-or-nothing). Idempotent: an already-billed UniqueBillId is skipped. Use after a
+  // config/rate fix to recover successful calls that had errored (e.g. no chargeable produced).
+  rpc ReprocessErrors (ReprocessRequest) returns (ReprocessResult);
 }
 
 enum ServiceType {
@@ -172,4 +178,22 @@ message CdrBatchResult {
   int32  chargeables_written   = 6;
   int32  cdr_errors_written    = 7;
   double total_charged         = 8;
+}
+
+// ---- ReprocessErrors (recover cdrerror rows) ------------------------------------------
+message ReprocessRequest {
+  string tenant          = 1;   // tenant dbName whose cdrerror to reprocess
+  string error_code      = 2;   // optional: restrict to this exact ErrorCode (empty = any)
+  bool   only_successful = 3;   // restrict to answered/billable calls (ChargingStatus=1, DurationSec>0)
+  int32  limit           = 4;   // max cdrerror rows to reprocess this call
+}
+
+message ReprocessResult {
+  bool   committed           = 1;   // true => the move committed atomically
+  string error               = 2;   // non-empty => rolled back / failed
+  int32  read                = 3;   // cdrerror rows read for this run
+  int32  recovered           = 4;   // moved cdrerror -> cdr
+  int32  still_errored       = 5;   // re-written to cdrerror (still failing)
+  int32  chargeables_written = 6;
+  double total_charged       = 7;
 }

@@ -55,6 +55,34 @@ public final class MySqlCdrBatchRunner {
     public CdrBatchResult Run(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs,
             IAutoIncrementManager ids, int segmentSize) {
+        return RunInternal(conn, mediation, partners, cdrs, ids, segmentSize, null);
+    }
+
+    /** An action run INSIDE the batch transaction (under the tenant lock), before the pipeline. */
+    @FunctionalInterface
+    private interface InTxAction { void run(Connection conn) throws SQLException; }
+
+    /**
+     * Re-rate cdrs that were read back from {@code cdrerror}, atomically moving the ones that now rate into
+     * {@code cdr}. The source {@code cdrerror} rows (by {@code IdCall}) are DELETED inside the SAME transaction
+     * as the re-write, so the transition is all-or-nothing: either {@code cdrerror -> cdr + chargeable +
+     * summary} commits, or every source row stays put in {@code cdrerror} (rollback). Idempotent — a cdr whose
+     * {@code UniqueBillId} is already in the {@code cdr} table is dropped by {@link #FilterAlreadyBilled} (the
+     * unique index is the hard backstop), so re-running never double-bills; a call still failing is simply
+     * re-written to {@code cdrerror} with its fresh reason.
+     */
+    public CdrBatchResult RunReprocess(Connection conn, MediationContext mediation,
+            Map<Integer, Partner> partners, List<cdr> cdrs, List<Long> sourceIdCalls,
+            IAutoIncrementManager ids, int segmentSize) {
+        return RunInternal(conn, mediation, partners, cdrs, ids, segmentSize, c -> {
+            for (cdr x : cdrs) x.ErrorCode = null;          // clear the stale error so the row can re-rate clean
+            DeleteCdrErrorsByIdCall(c, sourceIdCalls);       // remove the source error rows — atomic with the re-write
+        });
+    }
+
+    private CdrBatchResult RunInternal(Connection conn, MediationContext mediation,
+            Map<Integer, Partner> partners, List<cdr> cdrs,
+            IAutoIncrementManager ids, int segmentSize, InTxAction preProcess) {
         try {
             conn.setAutoCommit(false);   // conn.BeginTransaction()
         } catch (SQLException e) {
@@ -70,6 +98,9 @@ public final class MySqlCdrBatchRunner {
         AcquireLock(conn, batchLock);
         try {
             if (ids == null) ids = new MaxIdSeededAutoIncrementManager(conn);
+            // Reprocess-only: delete the source cdrerror rows here, INSIDE the tx and under the lock, so the
+            // move to cdr is atomic (rollback restores them). No-op for the normal ingest path (null action).
+            if (preProcess != null) preProcess.run(conn);
             // Cross-batch idempotency (T3): under the per-schema lock (so this SELECT sees the true committed
             // state and no concurrent batch can write between the check and our insert), drop any cdr whose
             // UniqueBillId is ALREADY billed in this schema's cdr table. A redelivered Kafka poll-batch (offsets
@@ -100,6 +131,22 @@ public final class MySqlCdrBatchRunner {
                 conn.setAutoCommit(true);
             } catch (SQLException ignored) {
                 // restore best-effort; the connection is the caller's to close.
+            }
+        }
+    }
+
+    /** Delete the given source cdrerror rows by IdCall (the per-call identity), chunked. Runs inside the tx. */
+    private static void DeleteCdrErrorsByIdCall(Connection conn, List<Long> idCalls) throws SQLException {
+        if (idCalls == null || idCalls.isEmpty()) return;
+        final int chunk = 500;
+        for (int i = 0; i < idCalls.size(); i += chunk) {
+            var slice = idCalls.subList(i, Math.min(i + chunk, idCalls.size()));
+            var sql = new StringBuilder("delete from cdrerror where IdCall in (");
+            for (int j = 0; j < slice.size(); j++) sql.append(j == 0 ? "?" : ",?");
+            sql.append(")");
+            try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+                for (int j = 0; j < slice.size(); j++) ps.setLong(j + 1, slice.get(j));
+                ps.executeUpdate();
             }
         }
     }

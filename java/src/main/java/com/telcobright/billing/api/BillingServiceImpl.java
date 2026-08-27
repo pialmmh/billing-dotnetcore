@@ -3,6 +3,7 @@ package com.telcobright.billing.api;
 import com.telcobright.billing.api.internal.FinalizeHandler;
 import com.telcobright.billing.api.internal.MaxRateHandler;
 import com.telcobright.billing.api.internal.ProcessCdrBatchHandler;
+import com.telcobright.billing.api.internal.ReprocessErrorsHandler;
 import com.telcobright.billing.grpc.CdrBatchRequest;
 import com.telcobright.billing.grpc.CdrBatchResult;
 import com.telcobright.billing.grpc.FinalizeRequest;
@@ -10,6 +11,8 @@ import com.telcobright.billing.grpc.FinalizeResponse;
 import com.telcobright.billing.grpc.MaxRateReply;
 import com.telcobright.billing.grpc.MaxRateRequest;
 import com.telcobright.billing.grpc.RatingService;
+import com.telcobright.billing.grpc.ReprocessRequest;
+import com.telcobright.billing.grpc.ReprocessResult;
 import io.quarkus.grpc.GrpcService;
 import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
@@ -26,12 +29,15 @@ public class BillingServiceImpl implements RatingService {
     private final ProcessCdrBatchHandler _processCdrBatch;
     private final MaxRateHandler _maxRate;
     private final FinalizeHandler _finalize;
+    private final ReprocessErrorsHandler _reprocess;
 
     @Inject
-    public BillingServiceImpl(ProcessCdrBatchHandler processCdrBatch, MaxRateHandler maxRate, FinalizeHandler finalize) {
+    public BillingServiceImpl(ProcessCdrBatchHandler processCdrBatch, MaxRateHandler maxRate, FinalizeHandler finalize,
+            ReprocessErrorsHandler reprocess) {
         this._processCdrBatch = processCdrBatch;
         this._maxRate = maxRate;
         this._finalize = finalize;
+        this._reprocess = reprocess;
     }
 
     @Override
@@ -49,6 +55,12 @@ public class BillingServiceImpl implements RatingService {
     @Override
     public Uni<CdrBatchResult> processCdrBatch(CdrBatchRequest request) {
         return Uni.createFrom().item(() -> _processCdrBatch.Handle(request))
+                .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
+    }
+
+    @Override
+    public Uni<ReprocessResult> reprocessErrors(ReprocessRequest request) {
+        return Uni.createFrom().item(() -> _reprocess.Handle(request))
                 .runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }
 }

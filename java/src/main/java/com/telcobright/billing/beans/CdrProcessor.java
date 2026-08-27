@@ -1,5 +1,6 @@
 package com.telcobright.billing.beans;
 
+import com.telcobright.billing.data.CdrRowMapper;
 import com.telcobright.billing.data.MySqlCdrBatchRunner;
 import com.telcobright.billing.data.MySqlConnectionFactory;
 import com.telcobright.billing.ingest.CdrKafkaConsumer;
@@ -110,6 +111,59 @@ public class CdrProcessor {
         log.infof("CdrProcessor tenant=%s cdrs=%d rated=%d errored=%d charged=%s",
                 tenant, cdrs.size(), r.Rated().size(), r.Errored().size(), r.TotalCharged());
 
+        return CdrProcessingResult.Ok(r);
+    }
+
+    /**
+     * Reprocess {@code cdrerror} rows for a tenant: read them back into cdrs, re-rate through the SAME pipeline,
+     * and ATOMICALLY move the ones that now rate into {@code cdr} (+ chargeable + summary) while deleting their
+     * source error rows — all in one transaction ({@link MySqlCdrBatchRunner#RunReprocess}). Idempotent: a
+     * UniqueBillId already in {@code cdr} is skipped (no double-bill); a call that still fails stays in
+     * {@code cdrerror} with its fresh reason. {@code onlySuccessful} restricts to answered/billable calls,
+     * {@code errorCode} (optional) to one reason, {@code limit} caps the batch. Never throws.
+     */
+    public CdrProcessingResult ReprocessErrors(String tenant, String errorCode, boolean onlySuccessful, int limit) {
+        Tenant resolved = tenants.FindByDbName(tenant);
+        if (resolved == null)
+            return CdrProcessingResult.Failed("unknown tenant '" + tenant + "'");
+        if (!connections.IsConfigured())
+            return CdrProcessingResult.Failed("datasource credentials not configured");
+
+        var cdrs = new java.util.ArrayList<cdr>();
+        var idCalls = new java.util.ArrayList<Long>();
+        CdrBatchResult r = null;
+        try (Connection conn = connections.Open(tenant)) {
+            StringBuilder where = new StringBuilder("1=1");
+            if (onlySuccessful) where.append(" and ChargingStatus=1 and DurationSec>0");
+            if (errorCode != null && !errorCode.isEmpty()) where.append(" and ErrorCode=?");
+            String sql = "select " + CdrRowMapper.SelectColumns() + " from cdrerror where " + where
+                    + " order by StartTime limit " + Math.max(0, limit);
+            try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+                if (errorCode != null && !errorCode.isEmpty()) ps.setString(1, errorCode);
+                try (java.sql.ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        cdr c = CdrRowMapper.FromResultSet(rs);
+                        cdrs.add(c);
+                        if (c.IdCall > 0) idCalls.add(c.IdCall);
+                    }
+                }
+            }
+            if (cdrs.isEmpty())
+                return CdrProcessingResult.Ok(new CdrBatchResult(java.util.List.of(), java.util.List.of(), 0, 0, 0));
+            r = batchRunner.RunReprocess(conn, resolved.Context.MediationContext, resolved.Context.Partners,
+                    cdrs, idCalls, null, com.telcobright.billing.mediation.sql.BatchSqlWriter.DefaultSegmentSize);
+        } catch (Exception ex) {
+            if (r == null) {
+                log.error("ReprocessErrors tenant=" + tenant + " rolled back", ex);
+                return CdrProcessingResult.Failed(ex.getMessage());
+            }
+            log.warn("ReprocessErrors tenant=" + tenant + " committed, but closing the connection failed", ex);
+        }
+
+        if (summary.Enabled)
+            summaryPublisher.Publish(tenant, summary.EntityType, r.Rated().size());
+        log.infof("ReprocessErrors tenant=%s read=%d recovered=%d stillErrored=%d charged=%s",
+                tenant, cdrs.size(), r.CdrsWritten(), r.CdrErrorsWritten(), r.TotalCharged());
         return CdrProcessingResult.Ok(r);
     }
 }
