@@ -78,7 +78,16 @@ public final class CdrPipeline {
                 var chargeables = _basicCharge.Rate(thisCdr, batch.Mediation(), batch.Partners());
 
                 var error = MediationValidator.Validate(thisCdr, batch.Mediation());
-                if (error.length() == 0 && chargeables.isEmpty()) error = "no chargeable produced";
+                // DURATION-BASED billing guard. The primary rule is duration, not the answered flag:
+                //   DurationSec > 0  => a BILLABLE call: it MUST produce a chargeable (SG + rate + rating all
+                //                       succeeded). A rate/config gap here goes to cdrerror, never a zero-billed cdr.
+                //   DurationSec == 0 => a legitimate FAILED call: it is NOT rated (legacy did not require a rate),
+                //                       so an empty chargeable is EXPECTED — it is written to the normal cdr table
+                //                       (for call-attempt/ASR stats + summary), never dumped to cdrerror for
+                //                       lacking a charge. (The per-SG answered/unanswered checklists already gate
+                //                       the billing-dependent validations on ChargingStatus.)
+                boolean billable = thisCdr.DurationSec != null && thisCdr.DurationSec.signum() > 0;
+                if (billable && error.length() == 0 && chargeables.isEmpty()) error = "no chargeable produced";
                 if (error.length() > 0) { thisCdr.ErrorCode = error; errored.add(thisCdr); continue; }
 
                 rated.add(new RatedCdr(thisCdr, chargeables));

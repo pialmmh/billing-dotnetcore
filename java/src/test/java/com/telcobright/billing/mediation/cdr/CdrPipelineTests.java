@@ -102,6 +102,60 @@ class CdrPipelineTests {
         assertTrue(store.ExecutedSql.stream().noneMatch(s -> s.contains("sum_voice_")));
     }
 
+    // A FAILED call (DurationSec = 0) to an unrated number — no billing fields, ChargingStatus not answered.
+    private static cdr FailedCall(String called, LocalDateTime when) {
+        cdr c = Call(called, when);
+        c.DurationSec = BigDecimal.ZERO;
+        c.RoundedDuration = BigDecimal.ZERO;
+        c.Duration1 = BigDecimal.ZERO;
+        c.ChargingStatus = 0;               // not answered
+        c.ConnectTime = null;
+        c.CountryCode = null;               // a no-rate call carries no billing-derived fields
+        c.MatchedPrefixSupplier = null;
+        c.AnsIdTerm = null;
+        return c;
+    }
+
+    /**
+     * The DURATION-based guard, primary rule: a zero-duration FAILED call with no rate is a legitimate cdr
+     * (call-attempt/ASR), NOT a cdrerror. It must never be dumped to cdrerror merely for lacking a charge.
+     */
+    @Test
+    void Zero_duration_failed_call_with_no_rate_goes_to_cdr_not_cdrerror() {
+        var store = new InMemorySqlExecutor();
+        var when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);
+        // 8809999999 -> 9999999 matches NO rate prefix; DurationSec 0 => failed call.
+        var batch = new CdrBatch(Mediation(), RetailPartner5, List.of(FailedCall("8809999999", when)), store);
+
+        var result = CdrPipeline.Default().Process(batch);
+
+        assertEquals(1, result.Rated().size(), "a zero-duration failed call must be written to cdr (ASR), not cdrerror");
+        assertEquals(0, result.Errored().size());
+        assertTrue(result.Rated().get(0).Chargeables().isEmpty(), "a failed call is not billed (no chargeable)");
+        assertEquals(1, count(store.ExecutedSql, s -> s.startsWith("insert into cdr (")));
+        assertEquals(0, count(store.ExecutedSql, s -> s.startsWith("insert into cdrerror (")));
+    }
+
+    /**
+     * The other side of the guard: a BILLABLE call (DurationSec > 0) with no rate must go to cdrerror, NOT
+     * become a zero-billed cdr. (Recoverable later via ReprocessErrors once the rate/config is fixed.)
+     */
+    @Test
+    void Positive_duration_billable_call_with_no_rate_goes_to_cdrerror_not_zero_billed_cdr() {
+        var store = new InMemorySqlExecutor();
+        var when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);
+        // same unrated number, but DurationSec > 0 (Call() sets 60) => billable => MUST error.
+        var batch = new CdrBatch(Mediation(), RetailPartner5, List.of(Call("8809999999", when)), store);
+
+        var result = CdrPipeline.Default().Process(batch);
+
+        assertEquals(0, result.Rated().size(), "a billable call with no rate must NOT become a zero-billed cdr");
+        assertEquals(1, result.Errored().size());
+        assertEquals("no chargeable produced", result.Errored().get(0).ErrorCode);
+        assertEquals(1, count(store.ExecutedSql, s -> s.startsWith("insert into cdrerror (")));
+        assertEquals(0, count(store.ExecutedSql, s -> s.startsWith("insert into cdr (")));
+    }
+
     // a checklist rule that rejects a call with no originating calling number.
     private static final class RequireCallingNumber implements IValidationRule<cdr> {
         @Override public boolean Validate(cdr c) {
