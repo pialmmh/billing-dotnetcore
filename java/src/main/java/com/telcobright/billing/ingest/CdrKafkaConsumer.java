@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The inbound Kafka CDR ingest loop (T1) — the real "cdr ingest" path that replaces the {@link CdrProcessor}
@@ -40,6 +41,7 @@ import java.util.concurrent.Executors;
 public final class CdrKafkaConsumer {
     private static final int ErrorBackoffSeconds = 5;
     private static final int MaxDeadLetterLogChars = 500;
+    private static final int DrainTimeoutSeconds = 20;   // cutover drain budget for the in-flight poll-batch
 
     private final Consumer<String, String> consumer;
     private final CdrEventPreprocessor preprocessor;
@@ -185,8 +187,15 @@ public final class CdrKafkaConsumer {
     }
 
     public void stop() {
+        // GRACEFUL DRAIN (cutover-safe): stop taking NEW poll-batches (running=false; the loop exits within one
+        // PollMs once idle), then let the in-flight batch finish — write cdr + cdrerror + acc_chargeable +
+        // summary_affected (tx commit = flush) and commitSync() the offsets — BEFORE we exit. Only if the drain
+        // overruns do we wakeup + interrupt (at-least-once redelivery covers that). Replaces the old
+        // shutdownNow(), which interrupted a batch mid-write and could leave a one-call restart-boundary gap.
         running = false;
-        try { consumer.wakeup(); } catch (Exception ignore) { /* best effort */ }
-        exec.shutdownNow();
+        boolean drained = GracefulDrain.drain(exec, DrainTimeoutSeconds, TimeUnit.SECONDS,
+                () -> { try { consumer.wakeup(); } catch (Exception ignore) { /* best effort */ } });
+        if (drained) log.info("cdr ingest drained cleanly (in-flight batch written + offsets committed)");
+        else log.warnf("cdr ingest drain overran %ds; forced (in-flight batch redelivered on restart)", DrainTimeoutSeconds);
     }
 }

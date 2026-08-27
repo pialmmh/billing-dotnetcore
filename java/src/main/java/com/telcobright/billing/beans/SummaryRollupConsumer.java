@@ -2,6 +2,7 @@ package com.telcobright.billing.beans;
 
 import com.telcobright.billing.data.MySqlConnectionFactory;
 import com.telcobright.billing.data.MySqlSummaryBatchRunner;
+import com.telcobright.billing.ingest.GracefulDrain;
 import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
 import com.telcobright.billing.tenantconfigsync.dependencies.SummaryRollupOptions;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
@@ -17,6 +18,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The summary ROLL-UP consumer loop — the decoupled service that turns each tenant's {@code summary_affected}
@@ -33,6 +35,7 @@ import java.util.concurrent.Executors;
 public class SummaryRollupConsumer {
     private static final Logger log = Logger.getLogger(SummaryRollupConsumer.class);
     private static final int ErrorBackoffSeconds = 5;
+    private static final int DrainTimeoutSeconds = 15;   // cutover drain budget for the in-flight sweep
 
     private final ITenantRegistry tenants;
     private final MySqlConnectionFactory connections;
@@ -71,8 +74,11 @@ public class SummaryRollupConsumer {
 
     @PreDestroy
     void onStop() {
+        // Graceful drain: let the current sweep finish flushing sum_voice before exit. Outbox rows are durable,
+        // so an overrun is safe to force — the next start re-sweeps the unprocessed rows.
         running = false;
-        exec.shutdownNow();
+        boolean drained = GracefulDrain.drain(exec, DrainTimeoutSeconds, TimeUnit.SECONDS, null);
+        if (!drained) log.warnf("summary roll-up drain overran %ds; forced (outbox rows re-swept on restart)", DrainTimeoutSeconds);
     }
 
     private void run() {
