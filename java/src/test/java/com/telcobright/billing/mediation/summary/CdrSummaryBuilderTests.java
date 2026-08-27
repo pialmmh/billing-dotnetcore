@@ -65,12 +65,17 @@ class CdrSummaryBuilderTests {
         cdr.OutPartnerCost = new BigDecimal("2.0");   // set by SfA2Z's supplier leg
         cdr.SupplierRate = new BigDecimal("2.0");
         cdr.Tax2 = new BigDecimal("0.3");
+        cdr.ZAmount = new BigDecimal("0.02");         // -> summary vat (production parity)
+        cdr.CostAnsIn = new BigDecimal("0.14");       // -> summary longDecimalAmount1 (anscost)
 
         var summary = CdrSummaryBuilder.Build(cdr, Sg10Chargeable(), SummaryBucket.Day);
 
         assertEquals(0, new BigDecimal("2.0").compareTo(summary.suppliercost));
         assertEquals(0, new BigDecimal("2.0").compareTo(summary.tup_supplierrate));
         assertEquals(0, new BigDecimal("0.3").compareTo(summary.tax2));
+        assertEquals(0, new BigDecimal("0.02").compareTo(summary.vat));                 // vat = cdr.ZAmount
+        assertEquals("BDT", summary.tup_vatcurrency);
+        assertEquals(0, new BigDecimal("0.14").compareTo(summary.longDecimalAmount1));  // anscost = cdr.CostAnsIn
     }
 
     @Test

@@ -24,9 +24,10 @@ import com.telcobright.billing.mediation.engine.models.sum_voice_hr_05;
  * The customer-leg fields come from the customer {@code acc_chargeable}. The supplier fields
  * ({@code suppliercost}/{@code supplierrate}/{@code tax2}) are read off the {@code cdr}, where the SF1
  * supplier leg stamps them under the default SG10 config — so they populate whenever a supplier rate
- * matched (0 otherwise), NOT "always 0". Only {@code vat} ({@code cdr.ZAmount}) and SG10 {@code anscost}
- * ({@code longDecimalAmount1}) are currently left 0 (unwired). Aggregation by {@code GetTupleKey()} + the
- * single-connection write are the persistence slice (deferred); this just builds the summary object.
+ * matched (0 otherwise), NOT "always 0". SG10 {@code vat} ({@code cdr.ZAmount}) and {@code anscost}
+ * ({@code longDecimalAmount1} = {@code cdr.CostAnsIn}) are now wired from the cdr, matching production.
+ * Aggregation by {@code GetTupleKey()} + the single-connection write are the persistence slice; this just
+ * builds the summary object.
  */
 public final class CdrSummaryBuilder {
     private CdrSummaryBuilder() {}
@@ -98,7 +99,12 @@ public final class CdrSummaryBuilder {
             s.tup_suppliercurrency = "BDT";
             s.tup_tax2currency = "BDT";
             s.tax2 = cdr.Tax2 != null ? cdr.Tax2 : BigDecimal.ZERO;
-            // vat (cdr.ZAmount) / longDecimalAmount1 (cdr.CostAnsIn, anscost) need the ANS extended leg — deferred.
+            // vat + anscost: production fills the summary vat from cdr.ZAmount and longDecimalAmount1 from
+            // cdr.CostAnsIn (both already stamped on the cdr). Wiring them closes the last sum_voice_*_03 gaps
+            // vs production (previously left 0 / "deferred").
+            s.vat = cdr.ZAmount != null ? cdr.ZAmount : BigDecimal.ZERO;
+            s.tup_vatcurrency = "BDT";
+            s.longDecimalAmount1 = cdr.CostAnsIn != null ? cdr.CostAnsIn : BigDecimal.ZERO;   // anscost
         } else if (chargeable.servicegroup == 11) {   // SgDomOffnetIn.SetServiceGroupWiseSummaryParams (customer leg)
             s.tup_sourceId = cdr.AnsIdOrig != null ? cdr.AnsIdOrig.toString() : null;
             s.tup_matchedprefixsupplier = cdr.MatchedPrefixSupplier;
