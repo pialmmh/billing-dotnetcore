@@ -190,6 +190,7 @@ public final class ProfileConfigReader {
             if (c.PollMs > 0) {
                 options.PollMs = c.PollMs;
             }
+            options.LegacyDedupEnabled = c.LegacyDedupEnabled;   // cutover switch; absent in yaml → false (unchanged)
         }
         return options;
     }
@@ -301,6 +302,7 @@ public final class ProfileConfigReader {
         public String ConsumerGroup;
         public String DeadLetterTopic;
         public int PollMs;
+        public boolean LegacyDedupEnabled;   // cutover switch (billing.cdr-ingest.legacy-dedup-enabled)
     }
 
     static final class SummaryRollupYaml {

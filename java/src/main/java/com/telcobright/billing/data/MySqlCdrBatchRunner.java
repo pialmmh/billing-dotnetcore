@@ -55,12 +55,28 @@ public final class MySqlCdrBatchRunner {
     public CdrBatchResult Run(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs,
             IAutoIncrementManager ids, int segmentSize) {
-        return RunInternal(conn, mediation, partners, cdrs, ids, segmentSize, null);
+        return RunInternal(conn, mediation, partners, cdrs, ids, segmentSize, null, false);
+    }
+
+    /**
+     * Same as {@link #Run(Connection, MediationContext, Map, List, IAutoIncrementManager, int)} but with the
+     * explicit CUTOVER {@code legacyDedup} switch: when {@code true}, a cdr whose {@code SequenceNumber} is
+     * already OWNED by legacy (present in this tenant's {@code cdr} OR {@code cdrerror}) is dropped BEFORE
+     * billing (see {@link #FilterLegacyOwned}). {@code false} = the unchanged normal path.
+     */
+    public CdrBatchResult Run(Connection conn, MediationContext mediation,
+            Map<Integer, Partner> partners, List<cdr> cdrs,
+            IAutoIncrementManager ids, int segmentSize, boolean legacyDedup) {
+        return RunInternal(conn, mediation, partners, cdrs, ids, segmentSize, null, legacyDedup);
     }
 
     /** An action run INSIDE the batch transaction (under the tenant lock), before the pipeline. */
     @FunctionalInterface
     private interface InTxAction { void run(Connection conn) throws SQLException; }
+
+    /** Cutover seq-ownership lookup seam — returns the subset of {@code candidates} legacy already owns. */
+    @FunctionalInterface
+    interface SeqOwnershipLookup { java.util.Set<Long> ownedSeqs(java.util.Set<Long> candidates) throws SQLException; }
 
     /**
      * Re-rate cdrs that were read back from {@code cdrerror}, atomically moving the ones that now rate into
@@ -74,15 +90,16 @@ public final class MySqlCdrBatchRunner {
     public CdrBatchResult RunReprocess(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs, List<Long> sourceIdCalls,
             IAutoIncrementManager ids, int segmentSize) {
+        // Reprocess is a distinct, operator-driven flow — never apply the cutover legacy-dedup here.
         return RunInternal(conn, mediation, partners, cdrs, ids, segmentSize, c -> {
             for (cdr x : cdrs) x.ErrorCode = null;          // clear the stale error so the row can re-rate clean
             DeleteCdrErrorsByIdCall(c, sourceIdCalls);       // remove the source error rows — atomic with the re-write
-        });
+        }, false);
     }
 
     private CdrBatchResult RunInternal(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs,
-            IAutoIncrementManager ids, int segmentSize, InTxAction preProcess) {
+            IAutoIncrementManager ids, int segmentSize, InTxAction preProcess, boolean legacyDedup) {
         try {
             conn.setAutoCommit(false);   // conn.BeginTransaction()
         } catch (SQLException e) {
@@ -101,12 +118,26 @@ public final class MySqlCdrBatchRunner {
             // Reprocess-only: delete the source cdrerror rows here, INSIDE the tx and under the lock, so the
             // move to cdr is atomic (rollback restores them). No-op for the normal ingest path (null action).
             if (preProcess != null) preProcess.run(conn);
+            // CUTOVER legacy-ownership dedup (feature-gated; OFF by default). An ADDITIONAL layer BEFORE the
+            // normal UniqueBillId idempotency: during the legacy→new cutover a cdr whose SequenceNumber is
+            // already owned by legacy (present in THIS tenant's cdr OR cdrerror, on this same connection/schema)
+            // is dropped — legacy cdr = billed, legacy cdrerror = failed-and-NOT-recovered; either way NEW
+            // billing must not touch it. Only seqs in NEITHER table proceed. Batched (one query per table) and
+            // FAIL-SAFE (a lookup SQLException propagates → whole batch rolls back / retries → never a silent bill).
+            List<cdr> afterLegacy = cdrs;
+            if (legacyDedup) {
+                afterLegacy = FilterLegacyOwned(cdrs, seqs -> jdbcOwnedSeqs(conn, seqs));
+                int skippedLegacy = cdrs.size() - afterLegacy.size();
+                if (skippedLegacy > 0)
+                    log.infof("cutover legacy-dedup: skipped %d cdr(s) owned by legacy (seq in cdr/cdrerror) in %s",
+                            skippedLegacy, batchLock);
+            }
             // Cross-batch idempotency (T3): under the per-schema lock (so this SELECT sees the true committed
             // state and no concurrent batch can write between the check and our insert), drop any cdr whose
             // UniqueBillId is ALREADY billed in this schema's cdr table. A redelivered Kafka poll-batch (offsets
             // commit only after the DB commit — at-least-once) therefore cannot double-write / double-bill.
             // The unique index on cdr(UniqueBillId) is the hard backstop if two processes ever race past this.
-            List<cdr> toProcess = FilterAlreadyBilled(conn, cdrs);
+            List<cdr> toProcess = FilterAlreadyBilled(conn, afterLegacy);
             int skipped = cdrs.size() - toProcess.size();
             if (skipped > 0)
                 log.infof("idempotency: skipped %d already-billed cdr(s) in %s (redelivery)", skipped, batchLock);
@@ -131,6 +162,62 @@ public final class MySqlCdrBatchRunner {
                 conn.setAutoCommit(true);
             } catch (SQLException ignored) {
                 // restore best-effort; the connection is the caller's to close.
+            }
+        }
+    }
+
+    /**
+     * CUTOVER legacy-ownership filter (only invoked when the {@code legacyDedup} flag is on). Keeps ONLY the
+     * cdrs whose {@code SequenceNumber} is present in NEITHER legacy {@code cdr} nor legacy {@code cdrerror}
+     * (i.e. legacy never owned them). SequenceNumber is the source-assigned identity shared by the legacy-file
+     * and Kafka paths, so a legacy-billed call (seq in {@code cdr}) or a legacy-failed call (seq in
+     * {@code cdrerror}, deliberately NOT recovered) is dropped here — absolute double-bill prevention.
+     *
+     * <p>The lookup is injected ({@link SeqOwnershipLookup}) so the full decision + the FAIL-SAFE contract are
+     * unit-testable without a DB; production supplies {@link #jdbcOwnedSeqs}. The lookup is BATCHED (one query
+     * per table for the whole poll-batch), and any {@code SQLException} it throws PROPAGATES — the caller's tx
+     * rolls back and the poll-batch is retried, so a lookup failure NEVER results in a silent bill.</p>
+     */
+    static List<cdr> FilterLegacyOwned(List<cdr> cdrs, SeqOwnershipLookup lookup) throws SQLException {
+        var seqs = new LinkedHashSet<Long>();
+        for (cdr c : cdrs) if (c.SequenceNumber > 0) seqs.add(c.SequenceNumber);
+        if (seqs.isEmpty()) return cdrs;                 // nothing checkable → normal path (seq is guaranteed by the preprocessor)
+        java.util.Set<Long> owned = lookup.ownedSeqs(seqs);   // FAIL-SAFE: a throw here aborts the batch (no bill)
+        return PartitionUnowned(cdrs, owned);
+    }
+
+    /** PURE: keep the cdrs whose SequenceNumber is NOT legacy-owned (seq &le; 0 is kept — cannot be matched). */
+    static List<cdr> PartitionUnowned(List<cdr> cdrs, java.util.Set<Long> ownedSeqs) {
+        if (ownedSeqs == null || ownedSeqs.isEmpty()) return cdrs;
+        var kept = new ArrayList<cdr>(cdrs.size());
+        for (cdr c : cdrs)
+            if (c.SequenceNumber <= 0 || !ownedSeqs.contains(c.SequenceNumber)) kept.add(c);
+        return kept;
+    }
+
+    /** Production seq-ownership lookup: the batched SequenceNumber IN-check against legacy cdr + cdrerror. */
+    private static java.util.Set<Long> jdbcOwnedSeqs(Connection conn, java.util.Set<Long> candidates) throws SQLException {
+        var owned = new HashSet<Long>();
+        SelectExistingSeqs(conn, "cdr", candidates, owned);
+        SelectExistingSeqs(conn, "cdrerror", candidates, owned);
+        return owned;
+    }
+
+    /** Batched {@code SELECT SequenceNumber FROM <table> WHERE SequenceNumber IN (…)} (chunked), index-served. */
+    private static void SelectExistingSeqs(Connection conn, String table, java.util.Set<Long> seqs,
+            java.util.Set<Long> into) throws SQLException {
+        var ids = new ArrayList<>(seqs);
+        final int chunk = 500;   // bound the IN-list; the poll-batch is small, this just caps a pathological one
+        for (int i = 0; i < ids.size(); i += chunk) {
+            var slice = ids.subList(i, Math.min(i + chunk, ids.size()));
+            var sql = new StringBuilder("select SequenceNumber from ").append(table).append(" where SequenceNumber in (");
+            for (int j = 0; j < slice.size(); j++) sql.append(j == 0 ? "?" : ",?");
+            sql.append(")");
+            try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+                for (int j = 0; j < slice.size(); j++) ps.setLong(j + 1, slice.get(j));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) into.add(rs.getLong(1));
+                }
             }
         }
     }
@@ -233,5 +320,11 @@ public final class MySqlCdrBatchRunner {
     public CdrBatchResult Run(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs, IAutoIncrementManager ids) {
         return Run(conn, mediation, partners, cdrs, ids, BatchSqlWriter.DefaultSegmentSize);
+    }
+
+    /** The ingest call-site overload: default ids/segment, with the explicit cutover {@code legacyDedup} switch. */
+    public CdrBatchResult Run(Connection conn, MediationContext mediation,
+            Map<Integer, Partner> partners, List<cdr> cdrs, boolean legacyDedup) {
+        return Run(conn, mediation, partners, cdrs, null, BatchSqlWriter.DefaultSegmentSize, legacyDedup);
     }
 }
