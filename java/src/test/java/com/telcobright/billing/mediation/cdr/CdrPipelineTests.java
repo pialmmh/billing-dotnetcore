@@ -82,7 +82,7 @@ class CdrPipelineTests {
         assertEquals(3, result.Total());
         assertEquals(2, result.Rated().size());
         assertEquals(1, result.Errored().size());                              // 8809999999 matched no rate -> cdrerror
-        assertEquals("no chargeable produced", result.Errored().get(0).ErrorCode);
+        assertTrue(result.Errored().get(0).ErrorCode.startsWith("RATE_NOT_FOUND"));
         assertEquals(0, new BigDecimal("2.0").compareTo(result.TotalCharged()));       // two 1.0 calls
         for (var r : result.Rated()) assertEquals(10, r.Customer().servicegroup);
 
@@ -151,7 +151,8 @@ class CdrPipelineTests {
 
         assertEquals(0, result.Rated().size(), "a billable call with no rate must NOT become a zero-billed cdr");
         assertEquals(1, result.Errored().size());
-        assertEquals("no chargeable produced", result.Errored().get(0).ErrorCode);
+        assertTrue(result.Errored().get(0).ErrorCode.startsWith("RATE_NOT_FOUND"),
+                "no rate matched -> RATE_NOT_FOUND, not a zero-billed cdr");
         assertEquals(1, count(store.ExecutedSql, s -> s.startsWith("insert into cdrerror (")));
         assertEquals(0, count(store.ExecutedSql, s -> s.startsWith("insert into cdr (")));
     }
