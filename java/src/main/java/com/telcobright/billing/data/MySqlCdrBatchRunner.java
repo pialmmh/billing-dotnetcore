@@ -195,8 +195,9 @@ public final class MySqlCdrBatchRunner {
         return kept;
     }
 
-    /** Production seq-ownership lookup: the batched SequenceNumber IN-check against legacy cdr + cdrerror. */
-    private static java.util.Set<Long> jdbcOwnedSeqs(Connection conn, java.util.Set<Long> candidates) throws SQLException {
+    /** Production seq-ownership lookup: the batched SequenceNumber IN-check against legacy cdr + cdrerror.
+     *  (Package-visible so the read-only production rehearsal can invoke the EXACT production lookup path.) */
+    static java.util.Set<Long> jdbcOwnedSeqs(Connection conn, java.util.Set<Long> candidates) throws SQLException {
         var owned = new HashSet<Long>();
         SelectExistingSeqs(conn, "cdr", candidates, owned);
         SelectExistingSeqs(conn, "cdrerror", candidates, owned);
