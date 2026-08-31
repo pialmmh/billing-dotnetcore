@@ -68,18 +68,6 @@ public final class MediationContext {
     public Map<String, Integer> AnsPrefixes = new HashMap<>();
 
     /**
-     * The prefixes a tenant has EXPLICITLY declared as legitimately free (internal / BDIX / configured-free
-     * destinations — e.g. the 096 service range + short codes). Used ONLY by the zero-rate guard
-     * ({@link com.telcobright.billing.mediation.cdr.ZeroRateGuard}) to tell a legitimate {@code rateamount=0}
-     * match (INTENTIONALLY_FREE → normal {@code cdr}) from an accidental one (UNEXPECTED_ZERO_RATE → {@code
-     * cdrerror}). Production carries no free flag, so this is an explicit declaration, NOT inferred from the
-     * amount or the service group/route. When EMPTY (unconfigured) the guard stays inactive and a matched-zero
-     * call keeps the pre-guard behavior (written to {@code cdr}) — so deploying the guard is a no-op until the
-     * tenant's free set is declared, which removes the deploy-time regression risk.
-     */
-    public java.util.Set<String> FreePrefixes = new java.util.HashSet<>();
-
-    /**
      * legacy {@code uom_conversion_dated} (USD→BDT) folded to a monthly map: key {@code "yyyy-MM"} → the
      * CONVERSION_FACTOR effective that month. Read ONLY by the SG15 Xyz leg (USD-denominated supplier cost).
      * Empty for tenants without international-outgoing config.

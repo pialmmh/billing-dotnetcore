@@ -41,7 +41,6 @@ import java.util.List;
  * consumes that row and rolls the totals up incrementally. The old inline roll-up engine has been removed.</p>
  */
 public final class CdrPipeline {
-    private static final org.jboss.logging.Logger LOG = org.jboss.logging.Logger.getLogger(CdrPipeline.class);
     private final BasicCharge _basicCharge;
 
     public CdrPipeline(BasicCharge basicCharge) { _basicCharge = basicCharge; }
@@ -83,25 +82,15 @@ public final class CdrPipeline {
                 //   DurationSec == 0 => a legitimate FAILED call: NOT rated (legacy required no rate) — an empty
                 //                       chargeable is EXPECTED. It is written to the normal cdr table (call-attempt
                 //                       /ASR stats + summary), NEVER dumped to cdrerror for lacking a charge.
-                //   DurationSec  > 0 => a BILLABLE call: the ZeroRateGuard classifies its CUSTOMER (revenue) leg
-                //                       on the rating OUTCOME (not the amount): RATE_NOT_FOUND / UNEXPECTED_ZERO_RATE
-                //                       -> cdrerror (revenue-risk, recover manually after fixing config); RATE_FOUND
-                //                       / INTENTIONALLY_FREE (a prefix declared free, e.g. internal/BDIX) -> cdr,
-                //                       zero charge is legitimate; GUARD_INACTIVE (no free set declared yet) -> cdr
-                //                       (pre-guard behavior). The per-SG answered/unanswered checklists already gate
-                //                       the billing-dependent validations on ChargingStatus.
+                //   DurationSec  > 0 => a BILLABLE call: it MUST have produced a CUSTOMER (revenue) leg — i.e. a
+                //                       customer rate MATCHED. A matched rate of amount 0 is a VALID zero-rated
+                //                       call (the rate table is the source of truth) and stays in cdr; only when
+                //                       NO customer rate matched is it RATE_NOT_FOUND -> cdrerror (recover manually
+                //                       after fixing config). Keying on the CUSTOMER leg (not chargeables.isEmpty())
+                //                       also stops an ICX-cost-only, revenue-less call from slipping into cdr.
                 boolean billable = thisCdr.DurationSec != null && thisCdr.DurationSec.signum() > 0;
-                if (billable && error.length() == 0) {
-                    ZeroRateGuard.Result z = ZeroRateGuard.classify(chargeables, batch.Mediation());
-                    if (z.status().toCdrError) {
-                        error = z.status() == ZeroRateGuard.Status.RATE_NOT_FOUND
-                                ? "RATE_NOT_FOUND: no customer charge produced (no rate matched)"
-                                : "UNEXPECTED_ZERO_RATE: prefix '" + z.customerPrefix()
-                                        + "' rated 0 but is not configured as free";
-                    } else if (z.status() == ZeroRateGuard.Status.GUARD_INACTIVE_NO_FREE_SET) {
-                        WarnNoFreeSetOnce(thisCdr, z.customerPrefix());
-                    }
-                }
+                if (billable && error.length() == 0 && !CustomerChargeGuard.HasCustomerLeg(chargeables))
+                    error = "RATE_NOT_FOUND: no customer charge produced (no rate matched)";
                 if (error.length() > 0) { thisCdr.ErrorCode = error; errored.add(thisCdr); continue; }
 
                 rated.add(new RatedCdr(thisCdr, chargeables));
@@ -131,19 +120,5 @@ public final class CdrPipeline {
 
     private static String Truncate(String text, int max) {
         return text == null ? "" : text.length() <= max ? text : text.substring(0, max);
-    }
-
-    // A billable call rated to zero while NO free-prefix set is declared: the guard cannot tell a legitimate
-    // free destination from an accidental zero, so it keeps the pre-guard behavior (writes to cdr) and warns
-    // ONCE (per JVM) that the tenant's free set should be declared to activate the guard. One-time to avoid
-    // log spam when legitimate free calls (e.g. the 096 range / short codes) recur.
-    private static volatile boolean _warnedNoFreeSet = false;
-
-    private static void WarnNoFreeSetOnce(cdr thisCdr, String prefix) {
-        if (_warnedNoFreeSet) return;
-        _warnedNoFreeSet = true;
-        LOG.warnf("zero-rate guard INACTIVE: a billable call rated 0 (prefix='%s', uniqueBillId=%s) but no "
-                + "FreePrefixes are declared — kept in cdr (pre-guard behavior). Declare the tenant's free set "
-                + "to activate UNEXPECTED_ZERO_RATE routing.", prefix, thisCdr.UniqueBillId);
     }
 }
