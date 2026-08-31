@@ -162,7 +162,7 @@ public final class CdrEventPreprocessor {
         c.SwitchId = switchId;                           // billing.mediation.switch-id (source NE idSwitch); 0 when unset
         c.SequenceNumber = e.sequenceNo;                 // idempotency key within the schema
         c.UniqueBillId = e.callId;
-        c.ChannelCallUuid = e.channelCallUuid;           // NEW col
+        c.AdditionalMetaData = e.channelCallUuid;        // call UUID -> AdditionalMetaData (existing persisted col)
         c.ResellerHierarchy = e.resellerHierarchy;       // NEW col
         // Provenance: the live cdr/cdrerror tables keep the legacy FileName NOT NULL (file mediation put the
         // source CSV name there); Kafka-ingested records carry the topic marker instead.
@@ -194,7 +194,7 @@ public final class CdrEventPreprocessor {
         // callerIp. routesphere's live envelope carries no separate route strings; these were landing null.
         c.IncomingRoute = e.receiverIp;
         c.OutgoingRoute = e.callerIp;
-        c.HangupCause = e.hangupCause;                   // NEW col
+        c.AreaCodeOrLata = e.hangupCause;                // hangup cause -> AreaCodeOrLata (existing persisted col)
         c.Codec = e.channelReadCodecName;
         c.PDD = e.pdd;
         c.InPartnerId = e.inPartnerId;

@@ -90,7 +90,7 @@ class CdrEventPreprocessorTests {
         cdr c = res.cdrs().get(0);
         assertEquals(1881104L, c.SequenceNumber);
         assertEquals("2-169791@103.95.96.78", c.UniqueBillId);
-        assertEquals("7def7167-dad1-4215-8680-a3e0d24d1b6a", c.ChannelCallUuid);
+        assertEquals("7def7167-dad1-4215-8680-a3e0d24d1b6a", c.AdditionalMetaData);
         assertEquals("telcobright > res_233", c.ResellerHierarchy);
         assertEquals(LocalDateTime.of(2026, 6, 17, 13, 34, 43), c.StartTime);
         assertEquals(LocalDateTime.of(2026, 6, 17, 13, 34, 56), c.EndTime);
@@ -105,7 +105,7 @@ class CdrEventPreprocessorTests {
         assertEquals("880", c.MatchedPrefixCustomer);
         assertEquals("BDT", c.InPartnerUom);
         assertEquals(1L, c.IdPackageAccount);
-        assertEquals("NORMAL_CLEARING", c.HangupCause);
+        assertEquals("NORMAL_CLEARING", c.AreaCodeOrLata);
         assertEquals("PCMU", c.Codec);
         assertEquals(0, new BigDecimal("0.350").compareTo(c.CustomerRate));   // reference (admission)
         assertEquals(0, new BigDecimal("0.012").compareTo(c.InPartnerCost));
