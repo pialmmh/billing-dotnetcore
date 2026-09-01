@@ -162,7 +162,7 @@ public final class CdrEventPreprocessor {
         c.SwitchId = switchId;                           // billing.mediation.switch-id (source NE idSwitch); 0 when unset
         c.SequenceNumber = e.sequenceNo;                 // idempotency key within the schema
         c.UniqueBillId = e.callId;
-        c.AdditionalMetaData = e.channelCallUuid;        // call UUID -> AdditionalMetaData (existing persisted col)
+        c.AdditionalMetaData = e.variableSipCallId;      // SIP Call-ID -> AdditionalMetaData (existing persisted col)
         c.ResellerHierarchy = e.resellerHierarchy;       // NEW col
         // Provenance: the live cdr/cdrerror tables keep the legacy FileName NOT NULL (file mediation put the
         // source CSV name there); Kafka-ingested records carry the topic marker instead.

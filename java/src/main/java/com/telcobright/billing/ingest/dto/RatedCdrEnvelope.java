@@ -35,6 +35,7 @@ public class RatedCdrEnvelope {
     public static class Leg {
         public String callId;
         public String sessionId;
+        public String variableSipCallId;     // SIP Call-ID header -> cdr.AdditionalMetaData
         public String tenantName;
         public String resellerHierarchy;
 
@@ -92,6 +93,7 @@ public class RatedCdrEnvelope {
         e.sequenceNo = this.sequenceNo;
         e.callId = leg.callId;
         e.channelCallUuid = leg.callId;                  // the sink keys records by callId
+        e.variableSipCallId = leg.variableSipCallId;     // SIP Call-ID -> cdr.AdditionalMetaData
 
         // LOCAL wall-clock: prefer the local twins; answerTime (UTC-only) shifts by the startTime offset.
         Duration utcToLocal = (leg.startTime != null && leg.startTimeLocal != null)

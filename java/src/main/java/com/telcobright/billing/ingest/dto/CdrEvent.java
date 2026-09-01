@@ -34,6 +34,9 @@ public class CdrEvent {
     /** Kafka key + {@code cdr.ChannelCallUuid}. */
     public String channelCallUuid;
 
+    /** SIP Call-ID header → {@code cdr.AdditionalMetaData}. */
+    public String variableSipCallId;
+
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
     public LocalDateTime startTime;
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")

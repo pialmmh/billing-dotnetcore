@@ -46,7 +46,7 @@ class CdrEventPreprocessorTests {
             [
               { "tenant":"res_233", "resellerHierarchy":"telcobright > res_233",
                 "sequenceNo":1881104, "callId":"2-169791@103.95.96.78",
-                "channelCallUuid":"7def7167-dad1-4215-8680-a3e0d24d1b6a",
+                "channelCallUuid":"7def7167-dad1-4215-8680-a3e0d24d1b6a","variableSipCallId":"sipcallid-2-169791",
                 "startTime":"2026-06-17 13:34:43","answerTime":"2026-06-17 13:34:54","endTime":"2026-06-17 13:34:56",
                 "durationSec":2.055,
                 "originatingCallingNumber":"09646999999","terminatingCallingNumber":"09646999999",
@@ -60,7 +60,7 @@ class CdrEventPreprocessorTests {
 
               { "tenant":"telcobright", "resellerHierarchy":"telcobright",
                 "sequenceNo":1881105, "callId":"2-169791@103.95.96.78",
-                "channelCallUuid":"7def7167-dad1-4215-8680-a3e0d24d1b6a",
+                "channelCallUuid":"7def7167-dad1-4215-8680-a3e0d24d1b6a","variableSipCallId":"sipcallid-2-169791",
                 "startTime":"2026-06-17 13:34:43","answerTime":"2026-06-17 13:34:54","endTime":"2026-06-17 13:34:56",
                 "durationSec":2.055,
                 "originatingCallingNumber":"09646999999","terminatingCallingNumber":"09646999999",
@@ -90,7 +90,7 @@ class CdrEventPreprocessorTests {
         cdr c = res.cdrs().get(0);
         assertEquals(1881104L, c.SequenceNumber);
         assertEquals("2-169791@103.95.96.78", c.UniqueBillId);
-        assertEquals("7def7167-dad1-4215-8680-a3e0d24d1b6a", c.AdditionalMetaData);
+        assertEquals("sipcallid-2-169791", c.AdditionalMetaData);   // variableSipCallId
         assertEquals("telcobright > res_233", c.ResellerHierarchy);
         assertEquals(LocalDateTime.of(2026, 6, 17, 13, 34, 43), c.StartTime);
         assertEquals(LocalDateTime.of(2026, 6, 17, 13, 34, 56), c.EndTime);
