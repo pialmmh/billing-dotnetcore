@@ -14,7 +14,6 @@ public class SummaryCache<TEntity extends ICacheble<TEntity> & ISummary<TEntity,
         extends AbstractCache<TEntity, TKey> {
 
     private final String entityOrTableName;
-    private final Object locker = new Object();
     private final IAutoIncrementManager AutoIncrementManager;
 
     public SummaryCache(String entityName, IAutoIncrementManager autoIncrementManager,

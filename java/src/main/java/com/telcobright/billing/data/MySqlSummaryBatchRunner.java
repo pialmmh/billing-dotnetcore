@@ -41,9 +41,11 @@ public final class MySqlSummaryBatchRunner {
         }
         // Session-scoped lock held across the commit — same guarantees as the cdr batch runner: the sum_voice
         // max(id) seeding is race-free and no second consumer folds the same page concurrently.
+        // AcquireLock sits INSIDE the try so a lock-timeout still restores autoCommit in the finally
+        // (releasing a never-acquired lock is a harmless no-op: RELEASE_LOCK returns 0).
         String lock = SummaryLockName(conn);
-        AcquireLock(conn, lock);
         try {
+            AcquireLock(conn, lock);
             long offset = ReadOffset(conn, entityType);
             List<SummaryRollup.OutboxRow> rows = ReadRows(conn, entityType, offset, maxRows);
             if (rows.isEmpty()) {
