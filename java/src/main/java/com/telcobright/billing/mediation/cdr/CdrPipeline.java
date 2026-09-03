@@ -91,11 +91,11 @@ public final class CdrPipeline {
                 boolean billable = thisCdr.DurationSec != null && thisCdr.DurationSec.signum() > 0;
                 if (billable && error.length() == 0 && !CustomerChargeGuard.HasCustomerLeg(chargeables))
                     error = "RATE_NOT_FOUND: no customer charge produced (no rate matched)";
-                if (error.length() > 0) { thisCdr.ErrorCode = error; errored.add(thisCdr); continue; }
+                if (error.length() > 0) { thisCdr.ErrorCode = Truncate(error, ErrorCodeMaxLen); errored.add(thisCdr); continue; }
 
                 rated.add(new RatedCdr(thisCdr, chargeables));
             } catch (RuntimeException mediationFailure) {
-                thisCdr.ErrorCode = Truncate("mediation failed: " + mediationFailure.getMessage(), 255);
+                thisCdr.ErrorCode = Truncate("mediation failed: " + mediationFailure.getMessage(), ErrorCodeMaxLen);
                 errored.add(thisCdr);
             }
         }
@@ -117,6 +117,15 @@ public final class CdrPipeline {
 
         return new CdrBatchResult(rated, errored, cdrsWritten, cdrErrorsWritten, chargeablesWritten);
     }
+
+    /**
+     * Hard cap matching {@code cdrerror.ErrorCode VARCHAR(512)}. EVERY ErrorCode assignment must pass through
+     * {@link #Truncate} with this cap: on 2026-09-03 a 228-char SG15 no-rate diagnostic overflowed the then-
+     * varchar(100) column, the cdrerror INSERT threw Data-truncation, the atomic batch rolled back, and the
+     * Kafka rewind replayed the same poison batch for 3h17m — an oversize message must degrade to a truncated
+     * message, never to a stalled pipeline.
+     */
+    private static final int ErrorCodeMaxLen = 512;
 
     private static String Truncate(String text, int max) {
         return text == null ? "" : text.length() <= max ? text : text.substring(0, max);
