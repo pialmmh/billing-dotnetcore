@@ -92,7 +92,10 @@ public class CdrProcessor {
         try (Connection conn = connections.Open(tenant)) {
             // The pipeline always writes ONE compressed summary_affected outbox row (atomic with the cdr write);
             // the standalone summary-service consumes it. (The old inline summary roll-up has been removed.)
-            r = batchRunner.Run(conn, resolved.Context.MediationContext, resolved.Context.Partners, cdrs);
+            // The cutover legacy-dedup switch (default false) is threaded through per-batch; when ON, cdrs whose
+            // SequenceNumber is already owned by legacy (cdr/cdrerror in THIS tenant's schema) are skipped.
+            r = batchRunner.Run(conn, resolved.Context.MediationContext, resolved.Context.Partners, cdrs,
+                    cdrIngest.LegacyDedupEnabled);
         } catch (Exception ex) {
             // r stays null when Run itself failed (the batch rolled back). r non-null means the commit
             // SUCCEEDED and the exception came after — realistically conn.close() — so the batch IS

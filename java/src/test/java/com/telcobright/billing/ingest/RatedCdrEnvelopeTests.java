@@ -91,7 +91,7 @@ class RatedCdrEnvelopeTests {
         cdr c = t.cdrs().get(0);
         assertEquals(1881184L, c.SequenceNumber);
         assertEquals("a077b494-94d1-4a5c-8094-9ba381207b28", c.UniqueBillId);
-        assertEquals("a077b494-94d1-4a5c-8094-9ba381207b28", c.ChannelCallUuid);
+        assertEquals("06cd6fb3f2074cfa85c63199a0d792c0", c.AdditionalMetaData);   // variableSipCallId
         assertEquals("telcobright > res_233 > res_233_2", c.ResellerHierarchy);
         // live-schema NOT NULLs the wire doesn't carry: provenance marker + signaling start = leg start
         assertEquals("kafka:cdr", c.FileName);
@@ -127,7 +127,7 @@ class RatedCdrEnvelopeTests {
         assertEquals(0, c.OutPartnerId);                                     // no egress partner -> 0
         assertEquals(0, BigDecimal.ZERO.compareTo(c.CustomerRate));          // no admission rate -> 0
         assertEquals("BDT", c.InPartnerUom);                                 // cash default
-        assertEquals("INSUFFICIENT_BALANCE", c.HangupCause);
+        assertEquals("INSUFFICIENT_BALANCE", c.AreaCodeOrLata);
     }
 
     @Test

@@ -4,8 +4,10 @@ import com.telcobright.billing.mediation.engine.models.AbstractCdrSummary;
 import com.telcobright.billing.mediation.engine.models.CdrSummaryType;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_02;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_03;
+import com.telcobright.billing.mediation.engine.models.sum_voice_day_05;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_02;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_03;
+import com.telcobright.billing.mediation.engine.models.sum_voice_hr_05;
 import com.telcobright.billing.mediation.summary.ISummaryStore;
 
 import java.sql.Connection;
@@ -64,14 +66,21 @@ public final class MySqlSummaryStore implements ISummaryStore {
         }
     }
 
-    private static AbstractCdrSummary MapRow(CdrSummaryType table, ResultSet r) throws SQLException {
-        AbstractCdrSummary s = switch (table) {
+    /** One entity instance per summary table. Package-visible so a unit test can pin EVERY enum value. */
+    static AbstractCdrSummary NewEntity(CdrSummaryType table) {
+        return switch (table) {
             case sum_voice_day_02 -> new sum_voice_day_02();
             case sum_voice_day_03 -> new sum_voice_day_03();
+            case sum_voice_day_05 -> new sum_voice_day_05();
             case sum_voice_hr_02 -> new sum_voice_hr_02();
             case sum_voice_hr_03 -> new sum_voice_hr_03();
+            case sum_voice_hr_05 -> new sum_voice_hr_05();
             default -> throw new UnsupportedOperationException("No summary entity mapped for " + table + ".");
         };
+    }
+
+    private static AbstractCdrSummary MapRow(CdrSummaryType table, ResultSet r) throws SQLException {
+        AbstractCdrSummary s = NewEntity(table);
 
         s.id = L(r, "id");
         s.tup_switchid = I(r, "tup_switchid");

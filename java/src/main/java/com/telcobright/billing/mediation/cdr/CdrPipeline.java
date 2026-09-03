@@ -79,20 +79,23 @@ public final class CdrPipeline {
 
                 var error = MediationValidator.Validate(thisCdr, batch.Mediation());
                 // DURATION-BASED billing guard. The primary rule is duration, not the answered flag:
-                //   DurationSec > 0  => a BILLABLE call: it MUST produce a chargeable (SG + rate + rating all
-                //                       succeeded). A rate/config gap here goes to cdrerror, never a zero-billed cdr.
-                //   DurationSec == 0 => a legitimate FAILED call: it is NOT rated (legacy did not require a rate),
-                //                       so an empty chargeable is EXPECTED — it is written to the normal cdr table
-                //                       (for call-attempt/ASR stats + summary), never dumped to cdrerror for
-                //                       lacking a charge. (The per-SG answered/unanswered checklists already gate
-                //                       the billing-dependent validations on ChargingStatus.)
+                //   DurationSec == 0 => a legitimate FAILED call: NOT rated (legacy required no rate) — an empty
+                //                       chargeable is EXPECTED. It is written to the normal cdr table (call-attempt
+                //                       /ASR stats + summary), NEVER dumped to cdrerror for lacking a charge.
+                //   DurationSec  > 0 => a BILLABLE call: it MUST have produced a CUSTOMER (revenue) leg — i.e. a
+                //                       customer rate MATCHED. A matched rate of amount 0 is a VALID zero-rated
+                //                       call (the rate table is the source of truth) and stays in cdr; only when
+                //                       NO customer rate matched is it RATE_NOT_FOUND -> cdrerror (recover manually
+                //                       after fixing config). Keying on the CUSTOMER leg (not chargeables.isEmpty())
+                //                       also stops an ICX-cost-only, revenue-less call from slipping into cdr.
                 boolean billable = thisCdr.DurationSec != null && thisCdr.DurationSec.signum() > 0;
-                if (billable && error.length() == 0 && chargeables.isEmpty()) error = "no chargeable produced";
-                if (error.length() > 0) { thisCdr.ErrorCode = error; errored.add(thisCdr); continue; }
+                if (billable && error.length() == 0 && !CustomerChargeGuard.HasCustomerLeg(chargeables))
+                    error = "RATE_NOT_FOUND: no customer charge produced (no rate matched)";
+                if (error.length() > 0) { thisCdr.ErrorCode = Truncate(error, ErrorCodeMaxLen); errored.add(thisCdr); continue; }
 
                 rated.add(new RatedCdr(thisCdr, chargeables));
             } catch (RuntimeException mediationFailure) {
-                thisCdr.ErrorCode = Truncate("mediation failed: " + mediationFailure.getMessage(), 255);
+                thisCdr.ErrorCode = Truncate("mediation failed: " + mediationFailure.getMessage(), ErrorCodeMaxLen);
                 errored.add(thisCdr);
             }
         }
@@ -114,6 +117,15 @@ public final class CdrPipeline {
 
         return new CdrBatchResult(rated, errored, cdrsWritten, cdrErrorsWritten, chargeablesWritten);
     }
+
+    /**
+     * Hard cap matching {@code cdrerror.ErrorCode VARCHAR(512)}. EVERY ErrorCode assignment must pass through
+     * {@link #Truncate} with this cap: on 2026-09-03 a 228-char SG15 no-rate diagnostic overflowed the then-
+     * varchar(100) column, the cdrerror INSERT threw Data-truncation, the atomic batch rolled back, and the
+     * Kafka rewind replayed the same poison batch for 3h17m — an oversize message must degrade to a truncated
+     * message, never to a stalled pipeline.
+     */
+    private static final int ErrorCodeMaxLen = 512;
 
     private static String Truncate(String text, int max) {
         return text == null ? "" : text.length() <= max ? text : text.substring(0, max);

@@ -26,6 +26,8 @@ import java.util.Properties;
 @Singleton
 public class SummaryChangeNotificationPublisher {
     private static final Logger log = Logger.getLogger(SummaryChangeNotificationPublisher.class);
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();   // proper escaping (no hand-built JSON)
 
     private final Producer<String, String> producer;   // null => disabled / no broker
     private final String topic;
@@ -53,8 +55,11 @@ public class SummaryChangeNotificationPublisher {
     public void Publish(String tenant, String entityType, int rows) {
         if (producer == null) return;
         try {
-            producer.send(new ProducerRecord<>(topic, null,
-                    "{\"tenant\":\"" + tenant + "\",\"entity\":\"" + entityType + "\",\"rows\":" + rows + "}"));
+            String payload = JSON.writeValueAsString(java.util.Map.of(
+                    "tenant", tenant == null ? "" : tenant,
+                    "entity", entityType == null ? "" : entityType,
+                    "rows", rows));
+            producer.send(new ProducerRecord<>(topic, null, payload));
         } catch (Exception ex) {
             log.warnf(ex, "summary change-notification failed for tenant %s (non-fatal; summary-service polls)", tenant);
         }

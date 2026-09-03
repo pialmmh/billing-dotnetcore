@@ -46,7 +46,7 @@ class CdrEventRealSampleTests {
                 "originatingCallingNumber": "09646999999", "terminatingCallingNumber": "09646999999",
                 "originatingCalledNumber": "8801789896378", "terminatingCalledNumber": "8801789896378",
                 "startTime": "2026-06-17 13:34:43", "answerTime": "2026-06-17 13:34:54", "endTime": "2026-06-17 13:34:56",
-                "durationSec": 2.055, "channelCallUuid": "7def7167-dad1-4215-8680-a3e0d24d1b6a", "hangupCause": "NORMAL_CLEARING",
+                "durationSec": 2.055, "channelCallUuid": "7def7167-dad1-4215-8680-a3e0d24d1b6a", "variableSipCallId": "sipcallid-2-169791", "hangupCause": "NORMAL_CLEARING",
                 "callerIp": "103.95.96.78", "receiverIp": "103.95.96.98", "tenant": "res_233",
                 "supplierPrefix": "", "supplierCost": 0.0, "isPrepaid": 1,
                 "inPartnerCost": 0.012, "inPartnerUom": "BDT", "costIcxIn": 0.001, "costAnsIn": 0.003,
@@ -60,7 +60,7 @@ class CdrEventRealSampleTests {
                 "originatingCallingNumber": "09646999999", "terminatingCallingNumber": "09646999999",
                 "originatingCalledNumber": "8801789896378", "terminatingCalledNumber": "8801789896378",
                 "startTime": "2026-06-17 13:34:43", "answerTime": "2026-06-17 13:34:54", "endTime": "2026-06-17 13:34:56",
-                "durationSec": 2.055, "channelCallUuid": "7def7167-dad1-4215-8680-a3e0d24d1b6a", "hangupCause": "NORMAL_CLEARING",
+                "durationSec": 2.055, "channelCallUuid": "7def7167-dad1-4215-8680-a3e0d24d1b6a", "variableSipCallId": "sipcallid-2-169791", "hangupCause": "NORMAL_CLEARING",
                 "callerIp": "103.95.96.78", "receiverIp": "103.95.96.98", "tenant": "telcobright",
                 "supplierPrefix": "", "supplierCost": 0.0, "isPrepaid": 2,
                 "inPartnerCost": 0.013, "inPartnerUom": "BDT", "costIcxIn": 0.001, "costAnsIn": 0.003,
@@ -136,7 +136,7 @@ class CdrEventRealSampleTests {
         cdr c = firstOf(b, "res_233");
         assertEquals(1881104L, c.SequenceNumber);
         assertEquals("2-169791@103.95.96.78", c.UniqueBillId);
-        assertEquals("7def7167-dad1-4215-8680-a3e0d24d1b6a", c.ChannelCallUuid);
+        assertEquals("sipcallid-2-169791", c.AdditionalMetaData);   // variableSipCallId
         assertEquals("telcobright > res_233", c.ResellerHierarchy);
         assertEquals(LocalDateTime.of(2026, 6, 17, 13, 34, 43), c.StartTime);
         assertEquals(LocalDateTime.of(2026, 6, 17, 13, 34, 54), c.AnswerTime);
@@ -147,7 +147,7 @@ class CdrEventRealSampleTests {
         assertEquals("103.95.96.98", c.IncomingRoute);   // = receiverIp (IP-trunk route)
         assertEquals("103.95.96.78", c.OutgoingRoute);   // = callerIp   (IP-trunk route)
         assertEquals(LocalDateTime.of(2026, 6, 17, 13, 34, 54), c.ConnectTime);   // = answerTime
-        assertEquals("NORMAL_CLEARING", c.HangupCause);
+        assertEquals("NORMAL_CLEARING", c.AreaCodeOrLata);
         assertEquals("PCMU", c.Codec);
         assertEquals(1, c.InPartnerId);
         assertEquals(234, c.OutPartnerId);
