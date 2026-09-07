@@ -18,8 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
- * Regression pins for the 2026-09-07 res_261 incident: all four rate rows of the reseller's plan were seeded on
- * the master with a trailing {@code 0x1F} on {@code Prefix} ({@code '880'} stored as {@code 3838301F}). Because
+ * Regression pins for the 2026-09-07 reseller-tier incident: all four rate rows of the reseller's plan were
+ * seeded on the master with a trailing {@code 0x1F} on {@code Prefix} ({@code '880'} as {@code 3838301F}). Because
  * {@link TupleRateLoader} keys the cache on {@code techPrefix + Prefix}, those rates became invisible — every
  * reseller call died as {@code RATE_NOT_FOUND} while a plain {@code SELECT Prefix} looked correct.
  *
@@ -36,7 +36,7 @@ class RatePrefixSanitizationTests {
     private static final DateRange Day = new DateRange(
             Answer.toLocalDate().atStartOfDay(), Answer.toLocalDate().atStartOfDay().plusDays(1));
 
-    /** res_261's plan 1 ("0.50_user1") with ONE rate row, whose Prefix/techPrefix are supplied by the caller. */
+    /** The reseller's plan 1 with ONE rate row, whose Prefix/techPrefix are supplied by the caller. */
     private static RateCache cacheWith(String ratePrefix, String techPrefix) {
         rate r = new rate();
         r.id = 2L;
@@ -50,7 +50,7 @@ class RatePrefixSanitizationTests {
 
         rateplan plan = new rateplan();
         plan.id = 1;
-        plan.RatePlanName = "0.50_user1";
+        plan.RatePlanName = "reseller customer plan";
         plan.field4 = techPrefix;
 
         rateplanassignmenttuple tuple = new rateplanassignmenttuple();
@@ -83,7 +83,7 @@ class RatePrefixSanitizationTests {
     /** THE INCIDENT: a trailing 0x1F on the rate's Prefix must no longer hide the rate. */
     @Test
     void control_char_on_rate_prefix_still_matches() {
-        Rateext hit = match(cacheWith("880" + Us, ""), "8801761625306");
+        Rateext hit = match(cacheWith("880" + Us, ""), "8801700000000");
         assertNotNull(hit, "'880\\x1F' must be scrubbed to '880' and still match the dialed number");
         assertEquals("880", hit.Prefix,
                 "the CLEANED prefix must be what flows on to acc_chargeable.Prefix / cdr.MatchedPrefixCustomer");
@@ -92,7 +92,7 @@ class RatePrefixSanitizationTests {
     /** The other half of the key: junk on rateplan.field4 (techPrefix) is scrubbed the same way. */
     @Test
     void control_char_on_techprefix_still_matches() {
-        Rateext hit = match(cacheWith("852", "00" + Us), "0085228866016");
+        Rateext hit = match(cacheWith("852", "00" + Us), "0085200000000");
         assertNotNull(hit, "techPrefix '00\\x1F' must be scrubbed to '00' so the key is '00852'");
         assertEquals("852", hit.Prefix);
     }
@@ -100,7 +100,7 @@ class RatePrefixSanitizationTests {
     /** Surrounding whitespace is junk too — a padded prefix must behave like the trimmed one. */
     @Test
     void whitespace_around_prefix_is_stripped() {
-        assertNotNull(match(cacheWith(" 880 ", ""), "8801761625306"));
+        assertNotNull(match(cacheWith(" 880 ", ""), "8801700000000"));
     }
 
     /** Clean data must be passed through byte-for-byte (no copy, no change). */
@@ -119,7 +119,7 @@ class RatePrefixSanitizationTests {
     @Test
     void null_prefix_is_not_promoted_to_a_catch_all() {
         assertNull(TupleRateLoader.SanitizePrefix(null, "test"));
-        assertNull(match(cacheWith(null, ""), "01761625306"),
+        assertNull(match(cacheWith(null, ""), "01700000000"),
                 "a null-prefix rate must stay unmatchable, not become a catch-all");
     }
 }
