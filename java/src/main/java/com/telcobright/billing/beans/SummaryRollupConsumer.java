@@ -123,7 +123,9 @@ public class SummaryRollupConsumer {
                     MySqlSummaryBatchRunner.Result r =
                             runner.Run(conn, opts.EntityType, opts.MaxRowsPerPoll, opts.SegmentSize);
                     total += r.callsFolded();
-                    if (r.rowsConsumed() < opts.MaxRowsPerPoll) break;   // a short page means this tenant is drained
+                    // a short OR empty page means this tenant is drained (== 0 also guards a
+                    // misconfigured MaxRowsPerPoll <= 0, which would otherwise busy-loop forever)
+                    if (r.rowsConsumed() == 0 || r.rowsConsumed() < opts.MaxRowsPerPoll) break;
                 }
             } catch (Exception ex) {
                 log.warnf("summary roll-up for tenant %s failed (isolated; retried next sweep): %s", db, ex.getMessage());

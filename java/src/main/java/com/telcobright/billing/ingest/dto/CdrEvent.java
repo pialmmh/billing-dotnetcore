@@ -31,8 +31,11 @@ public class CdrEvent {
     /** Call correlation across schemas → {@code cdr.UniqueBillId}. */
     public String callId;
 
-    /** Kafka key + {@code cdr.ChannelCallUuid}. */
+    /** Kafka key; required wire correlation key (validated in {@code CdrEventPreprocessor}), not persisted to cdr. */
     public String channelCallUuid;
+
+    /** SIP Call-ID header → {@code cdr.AdditionalMetaData}. */
+    public String variableSipCallId;
 
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss")
     public LocalDateTime startTime;

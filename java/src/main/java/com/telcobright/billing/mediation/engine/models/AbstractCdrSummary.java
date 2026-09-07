@@ -180,7 +180,15 @@ public abstract class AbstractCdrSummary
 
     @Override
     public AbstractCdrSummary CloneWithFakeId() {
-        AbstractCdrSummary newSummary = new sum_voice_day_03(); // any concrete type; cast in caller
+        // Same concrete type as the source — a clone of sum_voice_hr_05 must BE a sum_voice_hr_05
+        // (all subclasses are trivial no-arg shells over this abstract data shape).
+        AbstractCdrSummary newSummary;
+        try {
+            newSummary = this.getClass().getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("summary type " + this.getClass().getSimpleName()
+                    + " must have a public no-arg constructor", e);
+        }
         newSummary.id = -1; // must set externally
         newSummary.tup_switchid = this.tup_switchid;
         newSummary.tup_inpartnerid = this.tup_inpartnerid;

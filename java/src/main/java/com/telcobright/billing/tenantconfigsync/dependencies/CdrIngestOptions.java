@@ -15,4 +15,12 @@ public final class CdrIngestOptions {
     /** Records that fail decode/validation are logged and (if set) republished here. */
     public String DeadLetterTopic = "cdr_dlq";
     public int PollMs = 500;
+
+    /**
+     * CUTOVER feature flag ({@code billing.cdr-ingest.legacy-dedup-enabled}, default {@code false}). When ON,
+     * each batch drops any cdr whose {@code SequenceNumber} is already owned by legacy (present in the tenant's
+     * {@code cdr} OR {@code cdrerror}) BEFORE billing — the legacy→new ownership boundary. OFF = the normal path
+     * is completely unchanged. Only turn this on during a controlled cutover.
+     */
+    public boolean LegacyDedupEnabled = false;
 }

@@ -92,7 +92,10 @@ public class CdrProcessor {
         try (Connection conn = connections.Open(tenant)) {
             // The pipeline always writes ONE compressed summary_affected outbox row (atomic with the cdr write);
             // the standalone summary-service consumes it. (The old inline summary roll-up has been removed.)
-            r = batchRunner.Run(conn, resolved.Context.MediationContext, resolved.Context.Partners, cdrs);
+            // The cutover legacy-dedup switch (default false) is threaded through per-batch; when ON, cdrs whose
+            // SequenceNumber is already owned by legacy (cdr/cdrerror in THIS tenant's schema) are skipped.
+            r = batchRunner.Run(conn, resolved.Context.MediationContext, resolved.Context.Partners, cdrs,
+                    cdrIngest.LegacyDedupEnabled);
         } catch (Exception ex) {
             // r stays null when Run itself failed (the batch rolled back). r non-null means the commit
             // SUCCEEDED and the exception came after — realistically conn.close() — so the batch IS
@@ -133,7 +136,11 @@ public class CdrProcessor {
         var idCalls = new java.util.ArrayList<Long>();
         CdrBatchResult r = null;
         try (Connection conn = connections.Open(tenant)) {
-            StringBuilder where = new StringBuilder("1=1");
+            // CUTOVER OWNERSHIP GUARD: only rows THIS engine wrote (FileName='kafka:cdr') are recoverable.
+            // Legacy cdrerror rows are OLD-billing-owned and stay unbilled FOREVER — on 2026-09-03 an
+            // unfiltered reprocess pulled 7 legacy March rows into cdr (0-amount but count-polluting; all
+            // reversed). The engine must enforce this, not the caller's error_code filter.
+            StringBuilder where = new StringBuilder("FileName='kafka:cdr'");
             if (onlySuccessful) where.append(" and ChargingStatus=1 and DurationSec>0");
             if (errorCode != null && !errorCode.isEmpty()) where.append(" and ErrorCode=?");
             String sql = "select " + CdrRowMapper.SelectColumns() + " from cdrerror where " + where

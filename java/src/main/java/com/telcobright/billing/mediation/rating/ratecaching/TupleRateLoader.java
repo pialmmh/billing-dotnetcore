@@ -24,15 +24,20 @@ import com.telcobright.billing.mediation.engine.models.rateassign;
 import com.telcobright.billing.mediation.engine.models.rateplan;
 import com.telcobright.billing.mediation.engine.models.rateplanassignmenttuple;
 
+import org.jboss.logging.Logger;
+
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class TupleRateLoader implements IRateLoader {
     private static final LocalDateTime MaxDate = LocalDateTime.of(9999, 12, 31, 23, 59, 59);
+    private static final Logger LOG = Logger.getLogger(TupleRateLoader.class);
 
     private final List<rateplanassignmenttuple> _tuples;
     private final RateRowsByDateProvider _rowsProvider;
@@ -128,7 +133,67 @@ public final class TupleRateLoader implements IRateLoader {
 
     private String TechPrefixFor(int idRatePlan) {
         rateplan rp = _dicRatePlan.get(Integer.toString(idRatePlan));
-        return rp != null && rp.field4 != null ? rp.field4 : "";
+        if (rp == null || rp.field4 == null) return "";
+        return SanitizePrefix(rp.field4, "rateplan " + idRatePlan + " field4 (techPrefix)");
+    }
+
+    /**
+     * Scrub a prefix before it becomes half of a RateCache key. Rate prefixes are dialable digits (plus a
+     * leading {@code +}); a control character or stray whitespace in one is corrupt CONFIG, and because the
+     * cache is keyed on {@code techPrefix + Prefix} such a value can never be longest-prefix matched by any
+     * dialed number — the rate is simply invisible and every call it should have covered dies as
+     * {@code RATE_NOT_FOUND}, with the SELECT output looking perfectly fine (the char is unprintable).
+     *
+     * <p>That is not hypothetical: on 2026-08-06 all four {@code res_261.rate} rows were seeded on the master
+     * with a trailing {@code 0x1F} ({@code '880'} stored as {@code 3838301F}), which silently stopped the whole
+     * reseller tier from rating once config-manager was repointed at that master on 2026-09-02. Rather than
+     * zero-match in silence we strip the junk so the rate still applies, and WARN once per distinct bad value
+     * so the underlying data defect is visible and gets fixed at its source.
+     */
+    static String SanitizePrefix(String prefix, String what) {
+        // null is passed through UNCHANGED on purpose: a null Prefix already keys as the literal "…null" and is
+        // unmatchable, and turning it into "" would promote a corrupt row into a catch-all that matches every
+        // number under its tech prefix. Sanitizing must never make a rate match MORE than it did.
+        if (prefix == null || prefix.isEmpty()) return prefix;
+        boolean dirty = false;
+        for (int i = 0; i < prefix.length(); i++) {
+            char c = prefix.charAt(i);
+            if (Character.isISOControl(c) || Character.isWhitespace(c)) { dirty = true; break; }
+        }
+        if (!dirty) return prefix;                                  // the overwhelmingly common path: no copy
+
+        var clean = new StringBuilder(prefix.length());
+        for (int i = 0; i < prefix.length(); i++) {
+            char c = prefix.charAt(i);
+            if (!Character.isISOControl(c) && !Character.isWhitespace(c)) clean.append(c);
+        }
+        String result = clean.toString();
+        WarnOnce(what, prefix, result);
+        return result;
+    }
+
+    // One WARN per distinct (what, raw) pair — this runs per tenant per day-boundary reload, so an unbounded
+    // or un-deduped log would either spam or leak. Bounded: past the cap we stop remembering (and stop
+    // warning), which is fine — a config defect this widespread has already been reported many times over.
+    private static final int MaxWarnedPrefixes = 256;
+    private static final Set<String> WarnedPrefixes = ConcurrentHashMap.newKeySet();
+
+    private static void WarnOnce(String what, String raw, String cleaned) {
+        String seenKey = what + ' ' + raw;
+        if (WarnedPrefixes.size() >= MaxWarnedPrefixes || !WarnedPrefixes.add(seenKey)) return;
+        LOG.warnf("CORRUPT RATE PREFIX: %s = %s -> using '%s'. Fix the source data; until then this rate is "
+                + "matched on the cleaned value.", what, Escape(raw), cleaned);
+    }
+
+    /** Render a prefix with its unprintables visible (a plain log line would hide the very char at fault). */
+    private static String Escape(String s) {
+        var sb = new StringBuilder(s.length() + 8).append('\'');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x20 && c != 0x7F) sb.append(c);
+            else sb.append(String.format("\\x%02X", (int) c));
+        }
+        return sb.append('\'').toString();
     }
 
     // legacy DateRange.GetWhereExpressionRates(startdate, enddate) over the intersected span:
@@ -166,7 +231,9 @@ public final class TupleRateLoader implements IRateLoader {
         Rateext e = new Rateext();
         e.id = r.id;
         e.ProductId = r.ProductId;
-        e.Prefix = r.Prefix;
+        // Scrubbed HERE, at the one place a rate row enters the cache, so the cleaned value is what gets keyed
+        // AND what flows downstream into acc_chargeable.Prefix / cdr.MatchedPrefixCustomer.
+        e.Prefix = SanitizePrefix(r.Prefix, "rate " + r.id + " Prefix");
         e.description = r.description;
         e.rateamount = r.rateamount;
         e.WeekDayStart = r.WeekDayStart;

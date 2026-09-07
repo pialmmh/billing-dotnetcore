@@ -172,11 +172,17 @@ public final class BasicCharge {
             return List.of();
         }
 
-        Rateext rate = MatchServiceWideRate(cdr, mediation, XyzIcxServiceId, match.NormalizedNumber());
+        // Match with the number AS DIALED (only "+" removed), NOT the 00-stripped form: the RateCache keys every
+        // prefix as techPrefix + rate.Prefix, and the international plan carries techPrefix "00" (rateplan.field4)
+        // — so plan 117's '852' row is keyed '00852' and only the full dialed string '0085228866016' can hit it.
+        // (Matching with the stripped number returned NULL for every intl destination — 2026-09-03 HK incident.)
+        String dialed = cdr.OriginatingCalledNumber.startsWith("+")
+                ? cdr.OriginatingCalledNumber.substring(1) : cdr.OriginatingCalledNumber;
+        Rateext rate = MatchServiceWideRate(cdr, mediation, XyzIcxServiceId, dialed);
         if (rate == null) {
             if (answered) {
                 throw new IllegalStateException("SG15 answered international call has NO rate (idService=7) for dest="
-                        + cdr.OriginatingCalledNumber + " (stripped=" + match.NormalizedNumber() + ", uniqueBillId="
+                        + cdr.OriginatingCalledNumber + " (matched-with=" + dialed + ", uniqueBillId="
                         + cdr.UniqueBillId + ") — the Outgoing XYZ international plan is missing/incomplete");
             }
             LOG.debugf("SG15 failed call (no charge, no rate needed): dest=%s uniqueBillId=%s",

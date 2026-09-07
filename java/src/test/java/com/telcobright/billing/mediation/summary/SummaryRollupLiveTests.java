@@ -35,7 +35,7 @@ class SummaryRollupLiveTests {
 
     @Test
     void fold_outbox_into_sum_voice_and_report() {
-        String host = env("ROLLUP_HOST", "103.95.96.77");
+        String host = env("ROLLUP_HOST", "127.0.0.1");   // public repo: no real host defaults — pass ROLLUP_HOST
         int port = Integer.parseInt(env("ROLLUP_PORT", "3306"));
         String user = env("ROLLUP_USER", "");
         String pass = env("ROLLUP_PASS", "");

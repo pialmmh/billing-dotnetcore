@@ -22,7 +22,8 @@ import com.telcobright.billing.mediation.sql.ICacheble;
 import com.telcobright.billing.mediation.sql.ISqlExecutor;
 
 public abstract class AbstractCache<TEntity extends ICacheble<TEntity>, TKey> {
-    private final Object locker = new Object();
+    /** Single monitor for the whole cache — subclasses synchronize on this too (do NOT shadow it). */
+    protected final Object locker = new Object();
 
     protected AbstractCache(
             Function<TEntity, TKey> dictionaryKeyGenerator,
