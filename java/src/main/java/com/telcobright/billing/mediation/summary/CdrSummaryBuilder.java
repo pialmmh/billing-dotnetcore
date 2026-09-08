@@ -72,7 +72,10 @@ public final class CdrSummaryBuilder {
         // (TelcobrightVS13) uses NERSuccess == 1 — keep that exact semantic.
         s.connectedcallsCC = (cdr.NERSuccess != null && cdr.NERSuccess == 1) ? 1 : 0;
         s.successfulcalls = cdr.ChargingStatus != null ? cdr.ChargingStatus : 0;
-        s.actualduration = cdr.DurationSec;
+        // null-guarded like every sibling below: the field is non-null by contract (AbstractCdrSummary defaults
+        // it to ZERO and Merge/Multiply dereference it), so letting a null through would write SQL NULL and then
+        // NPE inside Merge — an exception in the fold is a rolled-back batch and a stalled consumer.
+        s.actualduration = cdr.DurationSec != null ? cdr.DurationSec : BigDecimal.ZERO;
         s.roundedduration = cdr.RoundedDuration != null ? cdr.RoundedDuration : BigDecimal.ZERO;
         s.duration1 = cdr.Duration1 != null ? cdr.Duration1 : BigDecimal.ZERO;
         s.duration2 = cdr.Duration2 != null ? cdr.Duration2 : BigDecimal.ZERO;

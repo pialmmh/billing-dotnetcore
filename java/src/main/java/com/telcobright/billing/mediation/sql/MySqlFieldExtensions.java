@@ -48,8 +48,16 @@ public final class MySqlFieldExtensions {
     }
 
     // merged from C# `ToMySqlField(this decimal)` + `ToMySqlField(this decimal?)`
+    //
+    // toPlainString(), NOT toString(): BigDecimal.toString() switches to SCIENTIFIC NOTATION once the adjusted
+    // exponent drops below -6, so a scale-8 value — which is what every money field becomes after
+    // ChargeableBuilder.Round(v, 8) — renders as `0E-8` / `1E-8` instead of `0.00000000` / `0.00000001`. These
+    // literals are concatenated into a raw Statement, and MySQL reads `0E-8` as an APPROXIMATE (double) literal,
+    // routing a DECIMAL money column through floating point. C# `decimal.ToString()` never did this, so the
+    // scientific form was never part of the behaviour being ported. Numerically identical either way —
+    // toPlainString only changes the textual form.
     public static String ToMySqlField(BigDecimal val) {
-        return val != null ? val.toString() : "null";
+        return val != null ? val.toPlainString() : "null";
     }
 
     // merged from C# `ToMySqlField(this DateTime)` + `ToMySqlField(this DateTime?)`

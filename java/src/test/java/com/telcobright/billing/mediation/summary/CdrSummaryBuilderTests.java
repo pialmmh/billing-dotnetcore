@@ -115,4 +115,33 @@ class CdrSummaryBuilderTests {
         assertEquals(0, new BigDecimal("2.0").compareTo(a.customercost));
         assertEquals(0, new BigDecimal("1.0").compareTo(a.tax1));
     }
+
+    /**
+     * {@code actualduration} used to be the ONE duration field assigned without a null guard, so a null
+     * {@code DurationSec} left it null — which wrote SQL NULL into a column the model defaults to ZERO and then
+     * threw NPE inside {@link com.telcobright.billing.mediation.engine.models.AbstractCdrSummary#Merge}. An
+     * exception in the fold rolls the batch back and stalls the consumer, so the guard matters more than the
+     * value: it must fold to ZERO exactly like roundedduration/duration1/duration2/duration3 already do.
+     */
+    @Test
+    void Null_duration_folds_to_zero_and_merges_without_throwing() {
+        var withNull = Sg10Cdr();
+        withNull.DurationSec = null;
+        withNull.RoundedDuration = null;
+        withNull.Duration1 = null;
+
+        var a = CdrSummaryBuilder.Build(withNull, Sg10Chargeable(), SummaryBucket.Day);
+        assertNotNull(a.actualduration, "a null DurationSec must fold to ZERO, never leave the field null");
+        assertEquals(0, BigDecimal.ZERO.compareTo(a.actualduration));
+
+        var b = CdrSummaryBuilder.Build(withNull, Sg10Chargeable(), SummaryBucket.Day);
+        assertDoesNotThrow(() -> a.Merge(b), "Merge must not NPE on a summary built from a null DurationSec");
+        assertEquals(2L, a.totalcalls);
+        assertEquals(0, BigDecimal.ZERO.compareTo(a.actualduration));
+
+        // and merging a null-duration summary INTO a normal one keeps the normal one's total intact
+        var normal = CdrSummaryBuilder.Build(Sg10Cdr(), Sg10Chargeable(), SummaryBucket.Day);
+        assertDoesNotThrow(() -> normal.Merge(CdrSummaryBuilder.Build(withNull, Sg10Chargeable(), SummaryBucket.Day)));
+        assertEquals(0, new BigDecimal("60").compareTo(normal.actualduration));
+    }
 }
