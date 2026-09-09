@@ -73,6 +73,38 @@ public final class A2ZRater {
     }
 
     /**
+     * The duration the AMOUNT was actually rated over, per the matched rate's own plan — {@link #Rate}'s
+     * surcharge/initial-period branching expressed as a duration, carrying none of its money. Pure: it reads the
+     * rate config and the actual duration, and computes nothing the amount path consumes.
+     *
+     * <p>Branch for branch against {@link #Rate}:
+     * <ul>
+     * <li>{@code SurchargeTime == 0} — the whole call is priced off {@code GetA2ZDuration(dur)}, so that IS the
+     *   rated duration (identical to {@code finalDuration} there).</li>
+     * <li>{@code dur <= SurchargeTime} — the initial period is charged whole; the rated duration is
+     *   {@code SurchargeTime} (identical to {@code finalDuration} there).</li>
+     * <li>{@code dur > SurchargeTime} — the amount is {@code surcharge window + GetA2ZDuration(dur -
+     *   SurchargeTime)}, i.e. it is priced over exactly those two spans, so the rated duration is their SUM. This
+     *   is the only branch that differs from {@code finalDuration}, which legacy leaves at 0 — see the class
+     *   note. Nothing here changes that: {@code Rate} is untouched and still returns the legacy 0, which is what
+     *   {@code acc_chargeable.Quantity} and the package-minute deduction keep consuming.</li>
+     * </ul>
+     *
+     * <p>Everything is taken from {@code thisRate} — the {@link Rateext} resolved through the calling tier's own
+     * assignment — so a multi-tier call rates each leg by that tier's plan. No constant is assumed anywhere.
+     */
+    public static BigDecimal GetRatedDurationSec(BigDecimal actualDurationSec, Rateext thisRate) {
+        if (thisRate.SurchargeTime == 0) {
+            return GetA2ZDuration(actualDurationSec, thisRate);
+        }
+        BigDecimal surchargeDuration = BigDecimal.valueOf(thisRate.SurchargeTime);
+        if (actualDurationSec.compareTo(surchargeDuration) <= 0) {
+            return surchargeDuration;
+        }
+        return surchargeDuration.add(GetA2ZDuration(actualDurationSec.subtract(surchargeDuration), thisRate));
+    }
+
+    /**
      * Pulse-adjusted duration (legacy PrefixMatcher.GetA2ZDuration). MinDurationSec is a millisecond-rounding
      * threshold (&lt;0 = use actual, &gt;0 = ceil if frac &gt;= threshold else floor, =0 = always ceil), then ceil up
      * to the Resolution (pulse) multiple.

@@ -1,10 +1,13 @@
 package com.telcobright.billing.mediation.servicefamilies;
 
+import com.telcobright.billing.mediation.context.MediationContext;
 import com.telcobright.billing.mediation.engine.models.Rateext;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.model.AssignmentDirection;
 import com.telcobright.billing.mediation.rating.A2ZRateResult;
 import com.telcobright.billing.mediation.rating.A2ZRater;
+
+import java.math.BigDecimal;
 
 /**
  * The legacy A2ZRater-end leg stamping shared by the A2Z families: stamp the matched leg's prefix, rate,
@@ -14,7 +17,8 @@ import com.telcobright.billing.mediation.rating.A2ZRater;
 final class FamilyStamp {
     private FamilyStamp() {}
 
-    static void StampLeg(cdr cdr, Rateext rate, AssignmentDirection direction, A2ZRateResult a2z) {
+    static void StampLeg(cdr cdr, Rateext rate, AssignmentDirection direction, A2ZRateResult a2z,
+            MediationContext mediation) {
         if (direction == AssignmentDirection.Supplier) {
             cdr.MatchedPrefixSupplier = rate.Prefix;
             cdr.SupplierRate = rate.rateamount;
@@ -24,10 +28,40 @@ final class FamilyStamp {
             cdr.MatchedPrefixCustomer = rate.Prefix;
             cdr.CustomerRate = rate.rateamount;
             cdr.InPartnerCost = a2z.Amount();
-            cdr.Duration1 = a2z.BilledDurationSec();
+            cdr.Duration1 = CustomerBilledDuration(cdr, rate, a2z, mediation);
             StampRoundedDuration(cdr, rate);
         }
         cdr.CountryCode = rate.CountryCode;
+    }
+
+    /**
+     * {@code cdr.Duration1} — the customer leg's billed duration.
+     *
+     * <p>Legacy writes {@code a2z.BilledDurationSec()}, the amount path's working duration, which A2ZRater
+     * leaves at <b>0</b> for every call that runs past {@code SurchargeTime} even though the call IS charged
+     * (initial period + rounded remainder). On a plan with an initial period that is most answered calls, so the
+     * column reports 0 seconds against a non-zero charge.
+     *
+     * <p>On a RESELLER tier it is therefore stamped with {@link A2ZRater#GetRatedDurationSec} — the same three
+     * surcharge branches the amount path prices, summed instead of dropped, over the same {@link Rateext} the
+     * amount was rated with (resolved through THAT tier's own tuple → rateassign → plan → longest-prefix row, so
+     * tier 1..N each use their own configuration). Nothing is assumed about the plan: no constant, no
+     * reseller-specific value, no dependency on idService=20 or any cost leg.
+     *
+     * <p>The ROOT/admin tenant keeps the legacy value verbatim ({@code IsResellerTier} false), so its cdrs stay
+     * per-call comparable with the legacy biller. {@code acc_chargeable.Quantity} keeps taking
+     * {@code a2z.BilledDurationSec()} straight from the family on EVERY tier — this is a cdr reporting column
+     * only, and the package-minute deduction (which divides Quantity) is untouched.
+     *
+     * <p>A null {@code DurationSec} cannot reach here through a family ({@code A2ZRater.Rate} dereferences it
+     * first), but the direct-call path is guarded anyway and falls back to the legacy value.
+     */
+    private static BigDecimal CustomerBilledDuration(cdr cdr, Rateext rate, A2ZRateResult a2z,
+            MediationContext mediation) {
+        if (mediation == null || !mediation.IsResellerTier || cdr.DurationSec == null) {
+            return a2z.BilledDurationSec();
+        }
+        return A2ZRater.GetRatedDurationSec(cdr.DurationSec, rate);
     }
 
     /**
@@ -52,6 +86,11 @@ final class FamilyStamp {
      *
      * <p>A null {@code DurationSec} is left alone (the column stays NULL); a matched rate on a 0-duration call
      * yields 0, which is {@link A2ZRater#GetA2ZDuration}'s own zero case.
+     *
+     * <p>Independent of {@code Duration1}: this is {@code GetA2ZDuration(actual)} — the plan's rounding of the
+     * WHOLE call, with no surcharge term — while {@code Duration1} is the rated duration, which splits the call
+     * at {@code SurchargeTime}. On a plan with an initial period the two legitimately differ, and neither reads
+     * the other. It is also stamped on every tier, reseller or not.
      */
     private static void StampRoundedDuration(cdr cdr, Rateext rate) {
         if (cdr.DurationSec == null) return;

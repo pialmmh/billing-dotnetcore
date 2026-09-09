@@ -29,7 +29,7 @@ public final class SfA2Z implements IServiceFamily {
             MediationContext mediation) {
         int maxDecimalPrecision = mediation.MaxDecimalPrecision;
         A2ZRateResult a2z = A2ZRater.Rate(rate, cdr.DurationSec, mediation.DicRatePlan, mediation.BillingSpans, maxDecimalPrecision);
-        FamilyStamp.StampLeg(cdr, rate, direction, a2z);
+        FamilyStamp.StampLeg(cdr, rate, direction, a2z, mediation);
 
         // legacy SfA2Z.SetTaxAmount: tax = InPartnerCost * OtherAmount3 / 100 (always InPartnerCost).
         var inPartnerCost = cdr.InPartnerCost != null ? cdr.InPartnerCost : BigDecimal.ZERO;

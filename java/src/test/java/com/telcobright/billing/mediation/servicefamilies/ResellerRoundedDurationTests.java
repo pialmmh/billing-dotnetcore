@@ -104,7 +104,9 @@ class ResellerRoundedDurationTests {
                 .billingspan(60).idRatePlan(idRatePlan);
         if (shape.surchargeTime() > 0) ra.surchargeTime(shape.surchargeTime()).surchargeAmount("60");
         f.tup(10, AssignmentDirection.Customer.value, idPartner, null, 0, ra);
-        return f.mediation();
+        MediationContext med = f.mediation();
+        med.IsResellerTier = true;    // what TenantTreeBuilder sets for any tenant with a parent
+        return med;
     }
 
     private static cdr CallOf(BigDecimal durationSec, int idPartner) {
@@ -246,10 +248,15 @@ class ResellerRoundedDurationTests {
 
     /**
      * Across the whole matrix, every financial output must still equal what {@code A2ZRater.Rate} produces on
-     * its own for the SAME matched rate — the stamp may not perturb amount, Quantity, or BilledDurationSec.
+     * its own for the SAME matched rate — the stamp may not perturb amount or Quantity.
+     *
+     * <p>{@code cdr.Duration1} is deliberately NOT asserted here: it is no longer the amount path's working
+     * duration on a reseller tier (it is the RATED duration —
+     * {@link ResellerBilledDurationTests}), while {@code Quantity} still is, which is the separation that
+     * matters and is pinned below.
      */
     @Test
-    void Amount_quantity_and_billed_duration_are_unchanged_across_every_plan_shape() {
+    void Amount_and_quantity_are_unchanged_across_every_plan_shape() {
         int partner = 900, plan = 950;
         for (PlanShape shape : Shapes) {
             partner++; plan++;
@@ -268,7 +275,6 @@ class ResellerRoundedDurationTests {
             assertEquals(0, expected.Amount().compareTo(ch.BilledAmount), shape.label() + ": BilledAmount moved");
             assertEquals(0, expected.Amount().compareTo(call.InPartnerCost), shape.label() + ": InPartnerCost moved");
             assertEquals(0, expected.BilledDurationSec().compareTo(ch.Quantity), shape.label() + ": Quantity moved");
-            assertEquals(0, expected.BilledDurationSec().compareTo(call.Duration1), shape.label() + ": Duration1 moved");
         }
     }
 
@@ -316,7 +322,7 @@ class ResellerRoundedDurationTests {
         Rateext rate = TestData.Ra(880, "0.50").resolution(1).minDurationSec(1f).billingspan(60).idRatePlan(1).rex();
 
         FamilyStamp.StampLeg(call, rate, AssignmentDirection.Customer,
-                new A2ZRateResult(BigDecimal.ZERO, BigDecimal.ZERO));
+                new A2ZRateResult(BigDecimal.ZERO, BigDecimal.ZERO), MediationContext.Empty);
 
         assertNull(call.RoundedDuration, "a genuinely NULL DurationSec must stay NULL, not become 0");
     }

@@ -24,7 +24,7 @@ public final class SfA2ZWithVatTax implements IServiceFamily {
             MediationContext mediation) {
         int maxDecimalPrecision = mediation.MaxDecimalPrecision;
         A2ZRateResult a2z = A2ZRater.Rate(rate, cdr.DurationSec, mediation.DicRatePlan, mediation.BillingSpans, maxDecimalPrecision);
-        FamilyStamp.StampLeg(cdr, rate, direction, a2z);
+        FamilyStamp.StampLeg(cdr, rate, direction, a2z, mediation);
 
         var otherAmount3 = rate.OtherAmount3 != null ? rate.OtherAmount3 : BigDecimal.ZERO;
         var tax = ChargeableBuilder.Round(a2z.Amount().multiply(otherAmount3), maxDecimalPrecision);

@@ -67,6 +67,45 @@ class TenantTreeTests {
                 root.AncestorChain.stream().map(t -> t.DbName).collect(Collectors.toList()));
     }
 
+    /**
+     * {@code IsResellerTier} is derived from tree position — set on every node that has a parent, left false on
+     * the root. It scopes the {@code cdr.Duration1} rated-duration stamp to reseller tiers, so getting it wrong
+     * either way silently changes cdrs.
+     */
+    @Test
+    void Reseller_tiers_are_flagged_and_the_root_is_not() {
+        Tenant root = BuildChainWithContexts();
+
+        assertFalse(root.Context.MediationContext.IsResellerTier, "the root/admin tenant is not a reseller tier");
+        assertTrue(root.Index.get("res_203").Context.MediationContext.IsResellerTier);
+        assertTrue(root.Index.get("res_205").Context.MediationContext.IsResellerTier, "...at every depth");
+    }
+
+    /**
+     * A tenant served with no context falls back to the {@code DynamicContext.Empty} singleton, whose
+     * {@code MediationContext} is {@code MediationContext.Empty} — shared process-wide. Flagging it would mark
+     * every default context as a reseller tier.
+     */
+    @Test
+    void The_shared_empty_context_is_never_flagged() {
+        BuildChain();   // every node keeps DynamicContext.Empty
+
+        assertFalse(MediationContext.Empty.IsResellerTier,
+                "the shared empty MediationContext must never be marked a reseller tier");
+    }
+
+    // the same chain, but each node carrying its OWN context (as the mapper builds it from a served config)
+    private static Tenant BuildChainWithContexts() {
+        Tenant root = BuildChain();
+        for (Tenant t : root.Index.values()) {
+            DynamicContext ctx = new DynamicContext();
+            ctx.MediationContext = new MediationContext();
+            t.Context = ctx;
+        }
+        TenantTreeBuilder.Finalize(root);
+        return root;
+    }
+
     @Test
     void Registry_swaps_and_resolves() {
         TenantRegistryState reg = new TenantRegistryState();

@@ -61,6 +61,19 @@ public final class MediationContext {
     public int MaxDecimalPrecision = 8;
 
     /**
+     * True for a RESELLER tier — any tenant that has a parent in the tenant tree. Set by
+     * {@code TenantTreeBuilder} when it walks the loaded tree; stays FALSE for the root/admin tenant and for
+     * every hand-built context (tests, {@link #Empty}), so the default is always the legacy behaviour.
+     *
+     * <p>Read by {@code FamilyStamp}: on a reseller tier {@code cdr.Duration1} is stamped with the duration the
+     * amount was actually RATED over ({@code A2ZRater.GetRatedDurationSec}) instead of the amount path's working
+     * duration, which legacy leaves at 0 for every call longer than the initial period. The root/admin tenant
+     * keeps the legacy value verbatim so its cdrs stay per-call comparable with the legacy biller. Reporting
+     * only — it selects nothing on the amount, tax, Quantity or package-deduction paths.
+     */
+    public boolean IsResellerTier = false;
+
+    /**
      * legacy {@code MediationContext.AnsPrefixes} — the tenant's {@code partnerprefix} table folded to
      * {@code prefix -> idPartner} (served as {@code prefixWisePartnerPrefixes}). Used by {@code AnsPrefixFinder}
      * to stamp the ANS operator id on the cdr (AnsIdOrig/AnsIdTerm). Empty when the tenant serves no partnerprefix.
