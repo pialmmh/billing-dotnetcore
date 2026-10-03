@@ -10,6 +10,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -93,5 +94,43 @@ class ProfileConfigReaderTests {
 
         assertFalse(s.Enabled);                            // off by default = legacy inline summaries
         assertEquals("cdr_summary_ping", s.PingTopic);     // default preserved when unset
+    }
+
+    // ── B1: a new consumer group starts at 'earliest' — a profile value (ad-is-a-call §4) ─────────────────────
+
+    @Test
+    void A_new_cdr_consumer_group_starts_at_earliest_unless_the_profile_says_latest() {
+        CdrIngestOptions unset = ProfileConfigReader.ReadCdrIngestFromYaml(
+                "billing:\n  cdr-ingest:\n    enabled: true\n    topic: \"cdr_btcl\"\n");
+        CdrIngestOptions latest = ProfileConfigReader.ReadCdrIngestFromYaml(
+                "billing:\n  cdr-ingest:\n    enabled: true\n    auto-offset-reset: \"Latest\"\n");
+        CdrIngestOptions absentBlock = ProfileConfigReader.ReadCdrIngestFromYaml("billing:\n  datasource:\n    host: \"x\"\n");
+
+        assertEquals("earliest", unset.AutoOffsetReset);       // the ratified default
+        assertEquals("cdr_btcl", unset.Topic);
+        assertEquals("latest", latest.AutoOffsetReset);        // a tenant's own choice, any letter case
+        assertEquals("earliest", absentBlock.AutoOffsetReset);
+    }
+
+    @Test
+    void An_offset_reset_word_kafka_does_not_know_is_refused_at_start() {
+        IllegalStateException refused = assertThrows(IllegalStateException.class,
+                () -> ProfileConfigReader.ReadCdrIngestFromYaml(
+                        "billing:\n  cdr-ingest:\n    enabled: true\n    auto-offset-reset: \"beginning\"\n"));
+
+        assertTrue(refused.getMessage().contains("billing.cdr-ingest.auto-offset-reset"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("'beginning'"), refused.getMessage());
+    }
+
+    @Test
+    void The_tries_before_a_held_batch_turns_the_health_road_red_are_a_profile_value() {
+        CdrIngestOptions unset = ProfileConfigReader.ReadCdrIngestFromYaml(
+                "billing:\n  cdr-ingest:\n    enabled: true\n    dead-letter-topic: \"cdr_dlq_btcl\"\n");
+        CdrIngestOptions seven = ProfileConfigReader.ReadCdrIngestFromYaml(
+                "billing:\n  cdr-ingest:\n    enabled: true\n    dead-letter-unhealthy-after-tries: 7\n");
+
+        assertEquals(3, unset.DeadLetterUnhealthyAfterTries);
+        assertEquals("cdr_dlq_btcl", unset.DeadLetterTopic);
+        assertEquals(7, seven.DeadLetterUnhealthyAfterTries);
     }
 }

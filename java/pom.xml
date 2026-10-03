@@ -75,6 +75,12 @@
             <artifactId>quarkus-jackson</artifactId>
         </dependency>
 
+        <!-- The health road (/q/health): red while the cdr ingest is refused or holds a batch (CdrIngestHealthCheck). -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-health</artifactId>
+        </dependency>
+
         <!-- YAML (tenants.yml + profile-*.yml), version managed by the Quarkus/Jackson BOM. -->
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>

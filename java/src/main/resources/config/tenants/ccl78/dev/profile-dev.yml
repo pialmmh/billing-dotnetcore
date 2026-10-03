@@ -61,6 +61,7 @@ billing:
     consumer-group: "billing-core-cdr-ingest"
     dead-letter-topic: "cdr_dlq"
     poll-ms: 500
+    auto-offset-reset: "latest"                           # this tenant's choice since T1: a NEW group reads only new cdrs
 
   # Mediation/rating module toggles (billing-core specific).
   mediation:

@@ -191,8 +191,24 @@ public final class ProfileConfigReader {
                 options.PollMs = c.PollMs;
             }
             options.LegacyDedupEnabled = c.LegacyDedupEnabled;   // cutover switch; absent in yaml → false (unchanged)
+            if (c.AutoOffsetReset != null && !c.AutoOffsetReset.isBlank()) {
+                options.AutoOffsetReset = OffsetResetOf(c.AutoOffsetReset);
+            }
+            if (c.DeadLetterUnhealthyAfterTries > 0) {
+                options.DeadLetterUnhealthyAfterTries = c.DeadLetterUnhealthyAfterTries;
+            }
         }
         return options;
+    }
+
+    /** {@code earliest} or {@code latest}; any other word is a refusal at start, not a silent default. */
+    private static String OffsetResetOf(String value) {
+        String word = value.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!word.equals("earliest") && !word.equals("latest")) {
+            throw new IllegalStateException("billing.cdr-ingest.auto-offset-reset must be 'earliest' or 'latest', not '"
+                + value + "'");
+        }
+        return word;
     }
 
     static SummaryRollupOptions ReadSummaryRollupFromYaml(String yaml) {
@@ -303,6 +319,8 @@ public final class ProfileConfigReader {
         public String DeadLetterTopic;
         public int PollMs;
         public boolean LegacyDedupEnabled;   // cutover switch (billing.cdr-ingest.legacy-dedup-enabled)
+        public String AutoOffsetReset;       // earliest (default) | latest
+        public int DeadLetterUnhealthyAfterTries;
     }
 
     static final class SummaryRollupYaml {

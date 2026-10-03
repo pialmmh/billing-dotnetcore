@@ -4,6 +4,7 @@ import com.telcobright.billing.data.CdrRowMapper;
 import com.telcobright.billing.data.MySqlCdrBatchRunner;
 import com.telcobright.billing.data.MySqlConnectionFactory;
 import com.telcobright.billing.ingest.CdrKafkaConsumer;
+import com.telcobright.billing.ingest.IngestHealth;
 import com.telcobright.billing.mediation.cdr.CdrBatchResult;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
@@ -42,6 +43,7 @@ public class CdrProcessor {
     private final SummaryChangeNotificationPublisher summaryPublisher;
     private final CdrIngestOptions cdrIngest;
     private final MediationOptions mediation;
+    private final IngestHealth ingestHealth;          // the ingest loop writes it; the health road reads it
 
     private CdrKafkaConsumer cdrConsumer;             // started on onStart when cdr ingest is enabled
 
@@ -49,7 +51,7 @@ public class CdrProcessor {
     public CdrProcessor(ITenantRegistry tenants, MySqlConnectionFactory connections,
             MySqlCdrBatchRunner batchRunner, SummaryOutboxOptions summary,
             SummaryChangeNotificationPublisher summaryPublisher, CdrIngestOptions cdrIngest,
-            MediationOptions mediation) {
+            MediationOptions mediation, IngestHealth ingestHealth) {
         this.tenants = tenants;
         this.connections = connections;
         this.batchRunner = batchRunner;
@@ -57,13 +59,14 @@ public class CdrProcessor {
         this.summaryPublisher = summaryPublisher;
         this.cdrIngest = cdrIngest;
         this.mediation = mediation;
+        this.ingestHealth = ingestHealth;
     }
 
     /** Startup seam: launch the inbound Kafka cdr ingest loop (poll -> preprocess -> ProcessBatch). When cdr
      * ingest is disabled (or no broker configured) the loop is not started and cdrs arrive via the gRPC entry.
      * Mirrors the .NET IHostedService.StartAsync + BillingBootstrap's config-event source wiring. */
     void onStart(@Observes StartupEvent ev) {
-        cdrConsumer = CdrKafkaConsumer.Start(this, tenants, cdrIngest, mediation.SwitchId, log);
+        cdrConsumer = CdrKafkaConsumer.Start(this, tenants, cdrIngest, mediation.SwitchId, ingestHealth, log);
         if (cdrConsumer == null)
             log.info("CdrProcessor started (gRPC-fed; Kafka cdr ingest loop not running)");
         else

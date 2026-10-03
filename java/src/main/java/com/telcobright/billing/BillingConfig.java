@@ -126,6 +126,13 @@ public class BillingConfig {
         return new RateCacheGuard(registry);
     }
 
+    // --- The cdr ingest's word on itself (written by the ingest loop, read by the health road) ----
+    @Produces
+    @Singleton
+    public com.telcobright.billing.ingest.IngestHealth ingestHealth() {
+        return new com.telcobright.billing.ingest.IngestHealth();
+    }
+
     // --- Datasource (the post-call / batch write slice) -------------------------------------------
     @Produces
     @Singleton

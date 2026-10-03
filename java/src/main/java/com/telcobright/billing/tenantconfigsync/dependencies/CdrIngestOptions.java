@@ -12,9 +12,20 @@ public final class CdrIngestOptions {
     /** The rated-CDR topic (key = channelCallUuid, value = CdrEvent[] for one call). */
     public String Topic = "cdr";
     public String ConsumerGroup = "billing-core-cdr-ingest";
-    /** Records that fail decode/validation are logged and (if set) republished here. */
+    /** Where the records this service refuses go ({@code cdr_dlq_<root tenant>} on the ratified wire). REQUIRED,
+     * and the topic must EXIST: the ingest consumes nothing until it does — a refused record must never be lost
+     * behind a committed offset. */
     public String DeadLetterTopic = "cdr_dlq";
+    /** After this many failed tries to publish one batch's dead letters the health road goes red
+     * ({@code billing.cdr-ingest.dead-letter-unhealthy-after-tries}). The batch is held and retried regardless. */
+    public int DeadLetterUnhealthyAfterTries = 3;
     public int PollMs = 500;
+    /**
+     * Where a consumer group with NO committed offset starts ({@code billing.cdr-ingest.auto-offset-reset}):
+     * {@code earliest} (the ratified default — nothing published before the group's first start may be skipped)
+     * or {@code latest}. It has no effect on a group that already has offsets.
+     */
+    public String AutoOffsetReset = "earliest";
 
     /**
      * CUTOVER feature flag ({@code billing.cdr-ingest.legacy-dedup-enabled}, default {@code false}). When ON,

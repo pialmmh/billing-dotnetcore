@@ -7,6 +7,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.telcobright.billing.ingest.dto.CdrEvent;
 import com.telcobright.billing.ingest.dto.RatedCdrEnvelope;
 import com.telcobright.billing.mediation.engine.models.cdr;
+import com.telcobright.billing.mediation.servicegroups.SgAdView;
 import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
 
@@ -31,15 +32,17 @@ import java.util.Map;
  * </ul>
  *
  * <p>Bad/unmappable records are routed to the dead-letter list (contract §3.5, §6) rather than poisoning the
- * batch. The pipeline RE-RATES on the actual duration (contract §5): the amounts carried in the event
- * ({@code callRatePerMinBDT}, {@code inPartnerCost}) are routesphere's admission RESERVATION estimates and are
- * mapped through for reference/reconciliation only — they are NOT used as the charge.
+ * batch. For a CALL the pipeline RE-RATES on the actual duration (contract §5): the amounts carried in the event
+ * ({@code callRatePerMinBDT}, {@code inPartnerCost}) are the switch's admission RESERVATION estimates and are
+ * mapped through for reference only. For an AD VIEW ({@code serviceGroup: 30}) they are what the switch's settle
+ * step charged — final — and are written as they came.
  *
- * <p><b>PROPOSED wire contract (§8/§9): flagged, not guessed.</b> The mappings the architect must still ratify
- * are marked {@code // PROPOSED} inline: {@code supplierCost → OutPartnerCost}; {@code isPrepaid} 1=prepaid /
- * 2=postpaid; {@code packageAmount} as its own {@code cdr} column. Required-field validation follows §2's ✓
- * columns — except {@code answerTime}, which the live sink omits on unanswered legs (FAILED/CANCELLED calls
- * are still billing records, charged zero; the rater falls back to startTime).
+ * <p><b>The wire is ratified</b> (routesphere {@code docs/architecture/ad-is-a-call.md} §4). What this class
+ * REQUIRES of a record is what the wire's schema requires and billing cannot do without: the tenant, the
+ * hierarchy, the ids, the start and end times, the duration, the four numbers and the two amounts. A record with
+ * no partner, no rate, no unit or no out-partner is VALID here — a view nobody was admitted for carries none of
+ * them — and is judged by the service group's checklists, which send it to {@code cdrerror} when it must not
+ * reach {@code cdr}. {@code answerTime} may be null: never answered, or never shown.
  */
 public final class CdrEventPreprocessor {
 
@@ -133,20 +136,22 @@ public final class CdrEventPreprocessor {
         if (Blank(e.callId)) return "missing callId";
         if (Blank(e.channelCallUuid)) return "missing channelCallUuid";
         if (e.startTime == null) return "missing startTime";
-        // answerTime is OPTIONAL: the live sink omits it on unanswered legs (FAILED/CANCELLED calls are
-        // still billing records, charged zero; the rater falls back to startTime).
+        // answerTime is NULLABLE (ratified): null = never answered (a call) or never shown (an ad view). The
+        // record is still valid; the live call sink omits the field on unanswered legs.
         if (e.endTime == null) return "missing endTime";
         if (e.durationSec == null) return "missing durationSec";
         if (Blank(e.originatingCallingNumber)) return "missing originatingCallingNumber";
         if (Blank(e.terminatingCallingNumber)) return "missing terminatingCallingNumber";
         if (Blank(e.originatingCalledNumber)) return "missing originatingCalledNumber";
         if (Blank(e.terminatingCalledNumber)) return "missing terminatingCalledNumber";
-        if (e.inPartnerId == null) return "missing inPartnerId";
-        if (e.outPartnerId == null) return "missing outPartnerId";
-        if (e.callRatePerMinBDT == null) return "missing callRatePerMinBDT";
-        if (Blank(e.inPartnerUom)) return "missing inPartnerUom";
+        // inPartnerId, outPartnerId, callRatePerMinBDT and inPartnerUom are OPTIONAL on the ratified wire: a view
+        // (or a call) nobody was admitted for has no rate, no unit and maybe no partner. Such a record is not a
+        // dead letter — it is mediated, and the service group's checklist decides between cdr and cdrerror.
         if (e.inPartnerCost == null) return "missing inPartnerCost";
         if (e.packageAmount == null) return "missing packageAmount";
+        if (StatesAnUnknownServiceGroup(e))
+            return "service group " + e.serviceGroup + " is not known to this billing-core"
+                    + " (a record may state " + SgAdView.Id + "; absent or 0 = billing detects the group)";
 
         String leaf = LastHierarchyNode(e.resellerHierarchy);
         if (!e.tenant.equals(leaf))
@@ -160,10 +165,14 @@ public final class CdrEventPreprocessor {
     private cdr Map(CdrEvent e) {
         cdr c = new cdr();
         c.SwitchId = switchId;                           // billing.mediation.switch-id (source NE idSwitch); 0 when unset
-        c.SequenceNumber = e.sequenceNo;                 // idempotency key within the schema
+        c.SequenceNumber = e.sequenceNo;                 // the producer's running number: order and diagnosis only
+        // A STATED group 30 (an ad view) is taken as given. Absent or 0 is left 0 here and DETECTED by the pipeline,
+        // as a call always was. No other value reaches this line: Validate refuses it.
+        c.ServiceGroup = SgAdView.IsStatedBy(e.serviceGroup) ? SgAdView.Id : 0;
         c.UniqueBillId = e.callId;
-        c.AdditionalMetaData = e.variableSipCallId;      // SIP Call-ID -> AdditionalMetaData (existing persisted col)
-        c.ResellerHierarchy = e.resellerHierarchy;       // NEW col
+        c.ChannelCallUuid = e.channelCallUuid;           // with the tenant: the idempotency key (one record per call per tier)
+        c.AdditionalMetaData = MetaDataOf(e);            // the wire's own JSON object, else the live feed's SIP Call-ID
+        c.ResellerHierarchy = e.resellerHierarchy;
         // Provenance: the live cdr/cdrerror tables keep the legacy FileName NOT NULL (file mediation put the
         // source CSV name there); Kafka-ingested records carry the topic marker instead.
         c.FileName = "kafka:cdr";
@@ -189,17 +198,19 @@ public final class CdrEventPreprocessor {
         c.TerminatingCalledNumber = e.terminatingCalledNumber;
         c.OriginatingIP = e.callerIp;
         c.TerminatingIP = e.receiverIp;
-        // Routes ARE the peer IPs on this IP-trunk topology (ops observation 2026-07-25): the call comes IN from
-        // the receiver side and goes OUT toward the caller side, so incomingRoute = receiverIp, outgoingRoute =
-        // callerIp. routesphere's live envelope carries no separate route strings; these were landing null.
-        c.IncomingRoute = e.receiverIp;
-        c.OutgoingRoute = e.callerIp;
-        c.AreaCodeOrLata = e.hangupCause;                // hangup cause -> AreaCodeOrLata (existing persisted col)
+        // The wire's own routes win (ratified: incomingRoute / outgoingRoute). A producer that sends none — the
+        // live call feed — keeps the peer addresses there: on that IP-trunk topology the routes ARE the peer IPs
+        // (ops observation 2026-07-25): the call comes IN from the receiver side and goes OUT toward the caller
+        // side, so IncomingRoute = receiverIp and OutgoingRoute = callerIp.
+        c.IncomingRoute = !Blank(e.incomingRoute) ? e.incomingRoute : e.receiverIp;
+        c.OutgoingRoute = !Blank(e.outgoingRoute) ? e.outgoingRoute : e.callerIp;
+        c.HangupCause = e.hangupCause;                   // ratified column (written where the table has it)
+        c.AreaCodeOrLata = e.hangupCause;                // and where the call lane has always kept it
         c.Codec = e.channelReadCodecName;
         c.PDD = e.pdd;
         c.InPartnerId = e.inPartnerId;
         c.OutPartnerId = e.outPartnerId;
-        c.PrePaid = e.isPrepaid;                         // PROPOSED: 1=prepaid, 2=postpaid (contract §8.3)
+        c.PrePaid = e.isPrepaid;                         // 1 = prepaid, 2 = postpaid, 0 = unknown
         c.MatchedPrefixCustomer = e.matchPrefixCustomer;
         c.MatchedPrefixSupplier = e.supplierPrefix;
         c.AnsIdTerm = e.ansIdTerm;
@@ -207,16 +218,29 @@ public final class CdrEventPreprocessor {
         c.AnsIdOrig = e.ansIdOrig;
         c.AnsPrefixOrig = e.ansPrefixOrig;
         c.CustomerRate = e.callRatePerMinBDT;            // REFERENCE (admission); re-rated on DurationSec
-        c.InPartnerUom = e.inPartnerUom;                 // NEW col
-        c.IdPackageAccount = e.idPackageAccount;         // NEW col
-        c.InPartnerCost = e.inPartnerCost;               // reference (admission estimate)
-        c.PackageAmount = e.packageAmount;               // NEW col
-        c.OutPartnerCost = e.supplierCost;               // PROPOSED target (contract §8.3)
+        c.InPartnerUom = e.inPartnerUom;
+        c.IdPackageAccount = e.idPackageAccount;
+        c.InPartnerCost = e.inPartnerCost;               // a call: reference (admission estimate); re-rated
+        c.PackageAmount = e.packageAmount;
+        c.OutPartnerCost = e.supplierCost;
         c.CostIcxIn = e.costIcxIn;
         c.CostAnsIn = e.costAnsIn;
         c.RevenueAnsOut = e.revenueAnsOut;
         c.RevenueIgwOut = e.revenueIgwOut;
         return c;
+    }
+
+    /** A record that STATES a group is never re-classified by a guess (architect's ruling 2026-10-04). Billing has
+     * one group it takes as given, 30; a record that states any other non-zero number is refused in words — it is
+     * not handed to the detectors, which would silently bill it as whatever they make of it. */
+    private static boolean StatesAnUnknownServiceGroup(CdrEvent e) {
+        return e.serviceGroup != null && e.serviceGroup != 0 && !SgAdView.IsStatedBy(e.serviceGroup);
+    }
+
+    /** {@code cdr.AdditionalMetaData}: the wire's {@code additionalMetaData} (one JSON object, as sent) when the
+     * producer sends it; else the live call feed's SIP Call-ID, which has lived in that column since T1. */
+    private static String MetaDataOf(CdrEvent e) {
+        return !Blank(e.additionalMetaData) ? e.additionalMetaData : e.variableSipCallId;
     }
 
     /** Last node of an {@code admin > … > self} hierarchy, trimmed; "" when the string has no node. */
