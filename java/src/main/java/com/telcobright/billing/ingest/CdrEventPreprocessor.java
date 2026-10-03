@@ -187,11 +187,7 @@ public final class CdrEventPreprocessor {
         // model defaults to; the leg's signaling start is its startTime (routesphere emits no separate value).
         c.SignalingStartTime = e.startTime;
         c.DurationSec = e.durationSec;                   // the pipeline RE-RATES on this
-        // ChargingStatus drives the summary's successfulcalls (legacy CdrSummaryFactory: successfulcalls =
-        // ChargingStatus; legacy FinalizeEngine sets it from Answered()). On the routesphere feed billsec
-        // (-> durationSec) is 0 on unanswered/failed legs, so duration > 0 IS the "answered/charged" signal.
-        // Was left null on the Kafka path -> successfulcalls always folded 0 even for fully-billed calls.
-        c.ChargingStatus = (e.durationSec != null && e.durationSec.signum() > 0) ? 1 : 0;
+        c.ChargingStatus = ChargingStatusOf(e);
         c.OriginatingCallingNumber = e.originatingCallingNumber;
         c.TerminatingCallingNumber = e.terminatingCallingNumber;
         c.OriginatingCalledNumber = e.originatingCalledNumber;
@@ -228,6 +224,22 @@ public final class CdrEventPreprocessor {
         c.RevenueAnsOut = e.revenueAnsOut;
         c.RevenueIgwOut = e.revenueIgwOut;
         return c;
+    }
+
+    /**
+     * {@code cdr.ChargingStatus} — "answered": it picks the service group's answered / unanswered checklist and is
+     * the summary's {@code successfulcalls} (legacy CdrSummaryFactory: successfulcalls = ChargingStatus; legacy
+     * FinalizeEngine sets it from Answered()).
+     *
+     * <p>A CALL: on the routesphere feed billsec (-> durationSec) is 0 on unanswered/failed legs and the live sink
+     * sends no answer time on them, so duration &gt; 0 IS the "answered/charged" signal.
+     *
+     * <p>An AD VIEW (SG 30): answered = SHOWN, and the wire says it outright — {@code answerTime} is null for a
+     * view never shown. A view that was shown and closed at once (0 seconds watched) is still answered.
+     */
+    private static int ChargingStatusOf(CdrEvent e) {
+        if (SgAdView.IsStatedBy(e.serviceGroup)) return e.answerTime != null ? 1 : 0;
+        return (e.durationSec != null && e.durationSec.signum() > 0) ? 1 : 0;
     }
 
     /** A record that STATES a group is never re-classified by a guess (architect's ruling 2026-10-04). Billing has

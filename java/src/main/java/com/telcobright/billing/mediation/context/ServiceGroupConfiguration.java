@@ -2,7 +2,10 @@
 package com.telcobright.billing.mediation.context;
 
 import com.telcobright.billing.mediation.engine.models.cdr;
+import com.telcobright.billing.mediation.validation.DurationSecGtEq0;
+import com.telcobright.billing.mediation.validation.EndTimeIsGtEqStartTime;
 import com.telcobright.billing.mediation.validation.IValidationRule;
+import com.telcobright.billing.mediation.validation.InPartnerIdGt0;
 
 import java.util.List;
 import java.util.Map;
@@ -32,9 +35,18 @@ public record ServiceGroupConfiguration(
         if (UnansweredChecklist == null) UnansweredChecklist = List.of();
     }
 
+    /** SG 30 — an ad view (stated by the producer, pre-rated by the switch; see {@code SgAdView}). */
+    public static final int AdViewServiceGroup = 30;
+
     /**
      * The built-in default configs (mirror the previously-hardcoded family map), overridden by
-     * config-manager: SG10 -> SF10 customer + SF1 supplier; SG11 -> SF11 customer.
+     * config-manager: SG10 -> SF10 customer + SF1 supplier; SG11 -> SF11 customer; SG30 -> SF30 customer
+     * (pre-rated: one chargeable from the record's settled amounts) with its two checklists.
+     *
+     * <p>SG30's checklists (brief B4). ANSWERED (the view was shown): an in-partner, a duration that is not
+     * negative, an end that is not before the start. UNANSWERED (never shown, or refused): an in-partner, an end
+     * that is not before the start. The switch always names an in-partner — the payer, else the tenant's own
+     * operator partner — so a record without one is not a view anybody can be billed for: it goes to cdrerror.
      */
     public static final Map<Integer, ServiceGroupConfiguration> Defaults = Map.of(
             10, new ServiceGroupConfiguration(10, false,
@@ -46,6 +58,24 @@ public record ServiceGroupConfiguration(
             11, new ServiceGroupConfiguration(11, false,
                     List.<Rule>of(
                             new RatingRule(11, 1, null)),   // SF11 customer (dom off-net in)
-                    List.of(), List.of())
+                    List.of(), List.of()),
+            AdViewServiceGroup, new ServiceGroupConfiguration(AdViewServiceGroup, false,
+                    List.<Rule>of(
+                            new RatingRule(30, 1, null)),   // SF30 customer (pre-rated)
+                    List.of(new InPartnerIdGt0(), new DurationSecGtEq0(), new EndTimeIsGtEqStartTime()),
+                    List.of(new InPartnerIdGt0(), new EndTimeIsGtEqStartTime()))
     );
+
+    /**
+     * The tenant's configurations, with SG30's built-in one where the tenant serves none. A served map REPLACES
+     * the defaults wholesale for SG10 / SG11 (a tenant that serves no SG10 has no SG10 — unchanged); SG30 alone is
+     * always there, because no detector can turn a stated ad view into anything else: without a configuration it
+     * would be written unchecked. A served SG30 wins over the built-in one.
+     */
+    public static Map<Integer, ServiceGroupConfiguration> WithTheBuiltInAdView(Map<Integer, ServiceGroupConfiguration> served) {
+        if (served.containsKey(AdViewServiceGroup)) return served;
+        Map<Integer, ServiceGroupConfiguration> all = new java.util.HashMap<>(served);
+        all.put(AdViewServiceGroup, Defaults.get(AdViewServiceGroup));
+        return all;
+    }
 }

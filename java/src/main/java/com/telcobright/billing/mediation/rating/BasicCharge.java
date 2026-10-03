@@ -17,8 +17,10 @@ import com.telcobright.billing.mediation.servicefamilies.SfA2Z;
 import com.telcobright.billing.mediation.servicefamilies.SfA2ZWithVatTax;
 import com.telcobright.billing.mediation.servicefamilies.SfDomOffNetInAns;
 import com.telcobright.billing.mediation.servicefamilies.SfDomOffNetOutIcx;
+import com.telcobright.billing.mediation.servicefamilies.SfPreRated;
 import com.telcobright.billing.mediation.servicefamilies.SfXyzIcx;
 import com.telcobright.billing.mediation.servicegroups.ServiceGroupDetection;
+import com.telcobright.billing.mediation.servicegroups.SgAdView;
 import com.telcobright.billing.mediation.servicegroups.ServiceGroupMatch;
 
 import java.time.LocalDateTime;
@@ -56,10 +58,10 @@ public final class BasicCharge {
     }
 
     // The legacy MEF service-family container, as a fixed registry: SF1 (base A2Z), SF10 (A2Z+VAT), SF11,
-    // SF20 (SG10 ICX/ANS vendor cost).
+    // SF20 (SG10 ICX/ANS vendor cost), SF7 (SG15 Xyz) — and SF30, the pre-rated family of an ad view (SG30).
     private static List<IServiceFamily> DefaultFamilies() {
         return List.of(new SfA2Z(), new SfA2ZWithVatTax(), new SfDomOffNetInAns(), new SfDomOffNetOutIcx(),
-                new SfXyzIcx());
+                new SfXyzIcx(), new SfPreRated());
     }
 
     /** idService of the service-wide ICX/ANS cost config (legacy SfDomOffNetOutIcx.Id), resolved for SG10. */
@@ -85,6 +87,11 @@ public final class BasicCharge {
      * disabled/unconfigured, or no rule produced a charge.
      */
     public List<acc_chargeable> Rate(cdr cdr, MediationContext mediation, Map<Integer, Partner> partners) {
+        // SG 30 (an ad view) is STATED by the producer and already charged by the switch. It never reaches the
+        // detectors — they would first reset its group to 0, then classify it by its payer's partner type or by
+        // the number "dialed" — and no rate is looked up for it.
+        if (SgAdView.Is(cdr.ServiceGroup)) return ChargeAsSettled(cdr, mediation);
+
         var match = _detection.Detect(cdr, partners);
         if (match == null) return List.of();
         cdr.ServiceGroup = match.ServiceGroupId();   // stamp the detected SG (legacy serviceGroup.Execute)
@@ -118,6 +125,25 @@ public final class BasicCharge {
                         AssignmentDirection.Supplier, mediation);
                 if (icx != null) chargeables.add(icx);
             }
+        }
+        return chargeables;
+    }
+
+    /**
+     * The chargeables of a PRE-RATED record (SG 30): the group's configured rating rules, run WITHOUT a rate — each
+     * rule's family must be one that needs none ({@link SfPreRated}); a rule that names any other family is passed
+     * over, since that family cannot charge without a rate. A group the tenant's configuration disables produces
+     * nothing, exactly as a disabled SG10 does.
+     */
+    private List<acc_chargeable> ChargeAsSettled(cdr cdr, MediationContext mediation) {
+        ServiceGroupConfiguration sgConfig = mediation.ServiceGroupConfigurations.get(cdr.ServiceGroup);
+        if (sgConfig == null || sgConfig.Disabled()) return List.of();
+
+        var chargeables = new ArrayList<acc_chargeable>();
+        for (var rule : sgConfig.Rules()) {
+            if (!(rule instanceof RatingRule rating)) continue;
+            if (!(_families.get(rating.IdServiceFamily()) instanceof SfPreRated preRated)) continue;
+            chargeables.add(preRated.Charge(null, cdr, cdr.ServiceGroup, directionFromValue(rating.AssignDirection()), mediation));
         }
         return chargeables;
     }

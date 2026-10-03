@@ -145,8 +145,8 @@ public final class MediationContext {
         MediationContext ctx = new MediationContext();
         ctx.Categories = categories != null ? categories : new HashMap<>();
         ctx.ServiceGroupRules = serviceGroupRules != null ? serviceGroupRules : List.of();
-        ctx.ServiceGroupConfigurations = serviceGroupConfigurations != null
-                ? serviceGroupConfigurations : ServiceGroupConfiguration.Defaults;
+        ctx.ServiceGroupConfigurations = ServiceGroupConfiguration.WithTheBuiltInAdView(serviceGroupConfigurations != null
+                ? serviceGroupConfigurations : ServiceGroupConfiguration.Defaults);
         ctx.CommonChecklist = commonChecklist != null ? commonChecklist : List.of();
         ctx.DicRatePlan = dicRatePlan != null ? dicRatePlan : new HashMap<>();
         ctx.BillingSpans = billingSpans != null ? billingSpans : new HashMap<>();
