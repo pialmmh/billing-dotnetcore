@@ -20,6 +20,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The TOP-LEVEL transaction boundary for ONE tenant's cdr batch — the legacy CdrJobProcessor's
@@ -132,15 +133,24 @@ public final class MySqlCdrBatchRunner {
                     log.infof("cutover legacy-dedup: skipped %d cdr(s) owned by legacy (seq in cdr/cdrerror) in %s",
                             skippedLegacy, batchLock);
             }
-            // Cross-batch idempotency (T3): under the per-schema lock (so this SELECT sees the true committed
-            // state and no concurrent batch can write between the check and our insert), drop any cdr whose
-            // UniqueBillId is ALREADY billed in this schema's cdr table. A redelivered Kafka poll-batch (offsets
-            // commit only after the DB commit — at-least-once) therefore cannot double-write / double-bill.
-            // The unique index on cdr(UniqueBillId) is the hard backstop if two processes ever race past this.
-            List<cdr> toProcess = FilterAlreadyBilled(conn, afterLegacy);
-            int skipped = cdrs.size() - toProcess.size();
-            if (skipped > 0)
-                log.infof("idempotency: skipped %d already-billed cdr(s) in %s (redelivery)", skipped, batchLock);
+            // IDEMPOTENCY (T3), under the per-schema lock (so the SELECT sees the true committed state and no
+            // concurrent batch can write between the check and our insert), in two steps:
+            //  (1) a later copy of a record INSIDE this batch is dropped — one poll can deliver one call twice (a
+            //      producer's retry, a republish after its restart). The first copy wins. Without this the
+            //      pipeline's own duplicate guard aborts the batch, the ingest rewinds, and the same poll fails
+            //      again — for ever;
+            //  (2) a record whose key is ALREADY written in this schema is dropped. A redelivered Kafka poll-batch
+            //      (offsets commit only after the DB commit — at-least-once) therefore cannot double-write /
+            //      double-bill. The unique index on the key is the hard backstop if two processes ever race past this.
+            IdempotencyKey key = IdempotencyKey.UniqueBillId;
+            List<cdr> firstCopies = DropLaterCopiesInTheBatch(afterLegacy, key);
+            if (firstCopies.size() < afterLegacy.size())
+                log.infof("idempotency: dropped %d later cop(ies) of a record inside one batch in %s",
+                        afterLegacy.size() - firstCopies.size(), batchLock);
+            List<cdr> toProcess = DropWhatIsAlreadyWritten(conn, firstCopies, key);
+            if (toProcess.size() < firstCopies.size())
+                log.infof("idempotency: skipped %d already-written cdr(s) in %s (redelivery)",
+                        firstCopies.size() - toProcess.size(), batchLock);
             // the pipeline writes EVERYTHING through this connection-bound store — one connection, one transaction.
             var store = new MySqlExecutor(conn);
             var batch = new CdrBatch(mediation, partners, toProcess, store, ids, segmentSize);
@@ -271,43 +281,60 @@ public final class MySqlCdrBatchRunner {
         }
     }
 
+    /** PURE: keep the FIRST record of each key, in order; a record with no key cannot be told from another and is
+     * always kept. */
+    static List<cdr> DropLaterCopiesInTheBatch(List<cdr> cdrs, IdempotencyKey key) {
+        Set<String> seen = new HashSet<>();
+        List<cdr> firstCopies = new ArrayList<>(cdrs.size());
+        for (cdr c : cdrs) {
+            String k = key.Of(c);
+            if (IdempotencyKey.IsBlank(k) || seen.add(k)) firstCopies.add(c);
+        }
+        return firstCopies.size() == cdrs.size() ? cdrs : firstCopies;
+    }
+
     /**
-     * Cross-batch dedup: return the cdrs whose UniqueBillId is NOT already present in this schema's cdr table
-     * (already-billed rows are dropped). Called under the tenant batch lock, so the read is race-free against
-     * other batches on the same schema. Cdrs with a null/empty UniqueBillId are always kept — they cannot be
-     * deduped, so the producer must supply the key for at-least-once safety. Only the {@code cdr} table (final
-     * bills) is checked; a previously-errored cdr may still be reprocessed (it might succeed after a config fix).
+     * Cross-batch dedup: return the cdrs whose key is NOT already present in this schema, in any of the key's tables
+     * (already-written rows are dropped). Called under the tenant batch lock, so the read is race-free against
+     * other batches on the same schema. Cdrs with a null/empty key are always kept — they cannot be deduped, so
+     * the producer must supply the key for at-least-once safety.
      */
-    private static List<cdr> FilterAlreadyBilled(Connection conn, List<cdr> cdrs) {
+    private static List<cdr> DropWhatIsAlreadyWritten(Connection conn, List<cdr> cdrs, IdempotencyKey key) {
         var candidates = new LinkedHashSet<String>();
         for (var c : cdrs)
-            if (c.UniqueBillId != null && !c.UniqueBillId.isEmpty()) candidates.add(c.UniqueBillId);
+            if (!IdempotencyKey.IsBlank(key.Of(c))) candidates.add(key.Of(c));
         if (candidates.isEmpty()) return cdrs;
 
         var already = new HashSet<String>();
-        var ids = new ArrayList<>(candidates);
+        for (String table : key.Tables()) SelectExistingKeys(conn, table, key.Column(), candidates, already);
+        if (already.isEmpty()) return cdrs;
+
+        var kept = new ArrayList<cdr>(cdrs.size());
+        for (var c : cdrs)
+            if (IdempotencyKey.IsBlank(key.Of(c)) || !already.contains(key.Of(c))) kept.add(c);
+        return kept;
+    }
+
+    /** Batched {@code SELECT <key> FROM <table> WHERE <key> IN (…)} (chunked), index-served. Table and column are
+     * internal literals of the {@link IdempotencyKey}, never external input. */
+    private static void SelectExistingKeys(Connection conn, String table, String column, Set<String> keys, Set<String> into) {
+        var ids = new ArrayList<>(keys);
         final int chunk = 500;   // batches are small; keep the IN-list bounded
         for (int i = 0; i < ids.size(); i += chunk) {
             var slice = ids.subList(i, Math.min(i + chunk, ids.size()));
-            var sql = new StringBuilder("select UniqueBillId from cdr where UniqueBillId in (");
+            var sql = new StringBuilder("select ").append(column).append(" from ").append(table)
+                    .append(" where ").append(column).append(" in (");
             for (int j = 0; j < slice.size(); j++) sql.append(j == 0 ? "?" : ",?");
             sql.append(")");
             try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
                 for (int j = 0; j < slice.size(); j++) ps.setString(j + 1, slice.get(j));
                 try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) already.add(rs.getString(1));
+                    while (rs.next()) into.add(rs.getString(1));
                 }
             } catch (SQLException e) {
                 throw new RuntimeException("idempotency dedup query failed", e);
             }
         }
-        if (already.isEmpty()) return cdrs;
-
-        var kept = new ArrayList<cdr>(cdrs.size());
-        for (var c : cdrs)
-            if (c.UniqueBillId == null || c.UniqueBillId.isEmpty() || !already.contains(c.UniqueBillId))
-                kept.add(c);
-        return kept;
     }
 
     // Default-parameter overloads — the C# method signed `ids = null, segmentSize = DefaultSegmentSize`.

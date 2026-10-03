@@ -203,4 +203,48 @@ class CdrBatchAtomicityTests {
         assertEquals(0L, Count(conn, "cdr"));                 // cdr + chargeable rolled back with the failed outbox write
         assertEquals(0L, Count(conn, "acc_chargeable"));
     }
+
+    // ── B5: idempotency on the tenant's schema (MySQL: the bill id, in cdr) ──────────────────────────────────
+
+    private void CreateTheFourTables() {
+        CreateDb(conn);
+        CreatePermissive(conn, "cdr", cdr.ExtInsertColumns);
+        CreatePermissive(conn, "cdrerror", cdr.ExtInsertColumns);
+        CreatePermissive(conn, "acc_chargeable", acc_chargeable.ExtInsertColumns);
+        CreateOutboxTable(conn);
+    }
+
+    @Test
+    void The_same_call_twice_in_ONE_batch_is_written_once_and_does_not_abort_the_batch() {
+        // Two copies of one call in one poll are both "not written yet" for the cross-batch dedup. Before this was
+        // filtered, the pipeline's duplicate guard threw, the batch rolled back, the ingest rewound and the same poll
+        // failed again — for ever.
+        CreateTheFourTables();
+        var when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);
+
+        var result = MySqlCdrBatchRunner.Default().Run(conn, Mediation(), Retail5,
+                List.of(Call("uid-1", when), Call("uid-2", when), Call("uid-1", when)));
+
+        assertEquals(2, result.Rated().size());
+        assertEquals(2L, Count(conn, "cdr"));
+        assertEquals(2L, Count(conn, "acc_chargeable"));
+        assertEquals(1L, Count(conn, "summary_affected"));     // one outbox row a batch
+        assertEquals(2, SummaryOutboxWriter.Decode(FirstOutboxData(conn)).size());
+    }
+
+    @Test
+    void A_batch_delivered_twice_leaves_the_same_rows_as_once_and_one_outbox_share() {
+        CreateTheFourTables();
+        var when = LocalDateTime.of(2026, 6, 19, 14, 30, 0);
+        var runner = MySqlCdrBatchRunner.Default();
+        runner.Run(conn, Mediation(), Retail5, List.of(Call("uid-1", when), Call("uid-2", when)));
+
+        var again = runner.Run(conn, Mediation(), Retail5, List.of(Call("uid-1", when), Call("uid-2", when)));
+
+        assertEquals(0, again.Rated().size());                  // dropped BEFORE mediation
+        assertEquals(0, again.Errored().size());
+        assertEquals(2L, Count(conn, "cdr"));
+        assertEquals(2L, Count(conn, "acc_chargeable"));
+        assertEquals(1L, Count(conn, "summary_affected"));     // the redelivery adds no share to the outbox
+    }
 }
