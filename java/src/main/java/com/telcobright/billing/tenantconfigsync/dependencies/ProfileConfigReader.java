@@ -161,6 +161,7 @@ public final class ProfileConfigReader {
             options.ResellerDbPrefix = ds.ResellerDbPrefix != null ? ds.ResellerDbPrefix : options.ResellerDbPrefix;
             options.Username = ds.Username != null ? ds.Username : "";
             options.Password = ds.Password != null ? ds.Password : "";
+            options.PasswordRef = ds.PasswordRef != null ? ds.PasswordRef : "";
         }
         return options;
     }
@@ -373,6 +374,7 @@ public final class ProfileConfigReader {
         public String ResellerDbPrefix;
         public String Username;
         public String Password;
+        public String PasswordRef;           // env:<VAR> — the name of the variable that holds the password
     }
 
     static final class SummaryYaml {

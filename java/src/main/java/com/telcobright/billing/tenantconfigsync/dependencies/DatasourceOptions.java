@@ -32,9 +32,12 @@ public final class DatasourceOptions {
     public String AdminDb = "";
     public String ResellerDbPrefix = "res_";
 
-    /** Inline DB credentials from the profile YAML (this project keeps them in config, not OpenBao). */
+    /** Inline DB credentials from the profile YAML — for the deployments that keep them there. */
     public String Username = "";
     public String Password = "";
+    /** {@code billing.datasource.password-ref}: {@code env:<VAR>} — the password is read from that environment
+     * variable at start, never from the YAML (the secreteer rule; see {@link DatasourceSecret}). */
+    public String PasswordRef = "";
 
     /** True once a host has been configured (the block is present in the active profile). */
     public boolean IsConfigured() {

@@ -13,6 +13,7 @@ import com.telcobright.billing.mediation.rating.MaxRateEngine;
 import com.telcobright.billing.mediation.rating.internal.MaxRateTierRater;
 import com.telcobright.billing.tenantconfigsync.dependencies.CdrIngestOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.DatasourceOptions;
+import com.telcobright.billing.tenantconfigsync.dependencies.DatasourceSecret;
 import com.telcobright.billing.tenantconfigsync.dependencies.MediationOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.ProfileConfigReader;
 import com.telcobright.billing.tenantconfigsync.dependencies.SummaryOutboxOptions;
@@ -39,8 +40,9 @@ import java.net.http.HttpClient;
  * rating engines (built via the engine's own {@code Default()} factories). The Quarkus gRPC host, the beans
  * (CdrProcessor, SummaryChangeNotificationPublisher), and the handlers are discovered automatically as beans.
  *
- * <p>Secrets (DB user/password) come 100% from the profile YAML inline (this project's convention — not
- * OpenBao, not env). The tenant registry (enable/disable + active profile) is read from
+ * <p>The datasource's password comes from the unit's ENVIRONMENT where the profile names a variable
+ * ({@code password-ref: env:<VAR>} — the wifi bed, the secreteer rule), else from the profile YAML inline (the
+ * deployments that keep it there). The tenant registry (enable/disable + active profile) is read from
  * application.properties (routesphere convention); the per-profile YAML detail from the classpath
  * config tree under src/main/resources/config.
  */
@@ -144,9 +146,12 @@ public class BillingConfig {
     @Produces
     @Singleton
     public ITenantConnectionFactory connectionFactory(DatasourceOptions ds) {
+        // The password: from the unit's environment where the profile names a variable (password-ref: env:<VAR>),
+        // else the profile's inline value. A named variable that is not set refuses the start, here, by name.
+        String password = DatasourceSecret.PasswordOf(ds);
         return ds.IsPostgres()
-                ? new PostgresConnectionFactory(ds.Host, ds.Port, ds.Database, ds.Username, ds.Password)
-                : new MySqlConnectionFactory(ds.Host, ds.Port, ds.Username, ds.Password);
+                ? new PostgresConnectionFactory(ds.Host, ds.Port, ds.Database, ds.Username, password)
+                : new MySqlConnectionFactory(ds.Host, ds.Port, ds.Username, password);
     }
 
     @Produces

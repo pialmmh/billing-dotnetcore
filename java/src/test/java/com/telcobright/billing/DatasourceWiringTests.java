@@ -67,4 +67,26 @@ class DatasourceWiringTests {
         assertTrue(refused.getMessage().contains("Set billing.summary-rollup.enabled: false"), refused.getMessage());
         assertDoesNotThrow(() -> SummaryRollupConsumerRefusal.On(SqlDialect.MySql));
     }
+
+    // ── B10: the password comes from the environment where the profile names a variable ──────────────────────
+
+    @Test
+    void the_start_is_refused_when_the_variable_the_profile_names_is_not_in_the_environment() {
+        String unset = "BC_TEST_A_VARIABLE_NOBODY_SETS_" + Long.toHexString(System.nanoTime()).toUpperCase();
+        DatasourceOptions ds = Profile("billing:\n  datasource:\n    kind: postgresql\n    host: \"h\"\n    database: \"routesphere\"\n"
+                + "    username: \"billing_core\"\n    password-ref: \"env:" + unset + "\"\n");
+
+        IllegalStateException refused = assertThrows(IllegalStateException.class, () -> wiring.connectionFactory(ds));
+
+        assertTrue(refused.getMessage().startsWith("REFUSING TO START"), refused.getMessage());
+        assertTrue(refused.getMessage().contains(unset), "it names the variable: " + refused.getMessage());
+    }
+
+    @Test
+    void a_mysql_profile_may_name_a_variable_too_and_is_refused_the_same_way() {
+        String unset = "BC_TEST_A_VARIABLE_NOBODY_SETS_" + Long.toHexString(System.nanoTime()).toUpperCase();
+        DatasourceOptions ds = Profile("billing:\n  datasource:\n    host: \"h\"\n    username: \"u\"\n    password-ref: \"env:" + unset + "\"\n");
+
+        assertThrows(IllegalStateException.class, () -> wiring.connectionFactory(ds));
+    }
 }
