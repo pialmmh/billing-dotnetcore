@@ -78,6 +78,20 @@ public final class CdrKafkaConsumer {
         void Wait(long ms);
     }
 
+    /** Fetches the tenant tree again and swaps it into the registry; throws when the tree cannot be fetched (the
+     * last good one then stays). */
+    @FunctionalInterface
+    public interface TreeReloader {
+        void Reload();
+    }
+
+    /** The batch is not written and not committed, and that is not a fault: it waits for something (the tree). */
+    private static final class HoldTheBatch extends RuntimeException {
+        HoldTheBatch(String why) {
+            super(why, null, false, false);
+        }
+    }
+
     /** A poll-batch whose rows are committed and whose dead letters are not on their topic yet. */
     private static final class HeldBatch {
         final Map<TopicPartition, OffsetAndMetadata> Offsets;
@@ -97,6 +111,8 @@ public final class CdrKafkaConsumer {
     private final ITenantRegistry registry;
     private final CdrIngestOptions opts;
     private final IngestHealth health;
+    private final TreeReloader tree;
+    private final UnknownTenantGate unknownTenants;
     private final Waiter waiter;
     private final Logger log;
     private final ExecutorService exec = Executors.newSingleThreadExecutor(r -> {
@@ -115,6 +131,15 @@ public final class CdrKafkaConsumer {
     CdrKafkaConsumer(Consumer<String, String> consumer, CdrEventPreprocessor preprocessor, RowWriter rowWriter,
             DeadLetterPublisher deadLetters, ITenantRegistry registry, CdrIngestOptions opts, IngestHealth health,
             Waiter waiter, Logger log) {
+        this(consumer, preprocessor, rowWriter, deadLetters, registry, opts, health, () -> { },
+                System::currentTimeMillis, waiter, log);
+    }
+
+    CdrKafkaConsumer(Consumer<String, String> consumer, CdrEventPreprocessor preprocessor, RowWriter rowWriter,
+            DeadLetterPublisher deadLetters, ITenantRegistry registry, CdrIngestOptions opts, IngestHealth health,
+            TreeReloader tree, java.util.function.LongSupplier clock, Waiter waiter, Logger log) {
+        this.tree = tree;
+        this.unknownTenants = new UnknownTenantGate(opts.UnknownTenantReloadSeconds * 1000L, clock);
         this.consumer = consumer;
         this.preprocessor = preprocessor;
         this.rowWriter = rowWriter;
@@ -130,7 +155,7 @@ public final class CdrKafkaConsumer {
     /** Build the consumer, subscribe to the CDR topic, and launch the poll loop. Returns {@code null} when the
      * ingest is disabled or no broker is configured (the caller then relies on the gRPC debug entry). */
     public static CdrKafkaConsumer Start(CdrProcessor processor, ITenantRegistry registry,
-            CdrIngestOptions opts, int switchId, IngestHealth health, Logger log) {
+            CdrIngestOptions opts, int switchId, IngestHealth health, TreeReloader tree, Logger log) {
         if (!opts.Enabled) {
             log.info("cdr ingest disabled (billing.cdr-ingest.enabled=false) — cdrs arrive via gRPC only");
             return null;
@@ -143,7 +168,7 @@ public final class CdrKafkaConsumer {
         MultiTenantCdrProcessor writer = new MultiTenantCdrProcessor(processor, log);
         CdrKafkaConsumer loop = new CdrKafkaConsumer(new KafkaConsumer<>(ConsumerProperties(opts)),
                 new CdrEventPreprocessor(registry, switchId), writer::Process, DeadLetterPublisherOf(opts, log),
-                registry, opts, health, CdrKafkaConsumer::Sleep, log);
+                registry, opts, health, tree, System::currentTimeMillis, CdrKafkaConsumer::Sleep, log);
         loop.exec.submit(loop::run);
         log.infof("cdr ingest listening on topic '%s' (servers=%s, group=%s, a new group starts at %s, dead letters -> '%s')",
                 opts.Topic, opts.BootstrapServers, opts.ConsumerGroup, opts.AutoOffsetReset, opts.DeadLetterTopic);
@@ -283,6 +308,10 @@ public final class CdrKafkaConsumer {
             if (PublishOrHold(records, refused)) consumer.commitSync();
         } catch (WakeupException shutdown) {
             throw shutdown;
+        } catch (HoldTheBatch waiting) {
+            log.warnf("cdr poll-batch held, nothing written: %s", waiting.getMessage());
+            SeekBackToBatchStart(records);
+            waiter.Wait(ErrorBackoffSeconds * 1000L);
         } catch (Exception ex) {
             // do NOT commit; rewind to the batch start so it is redelivered (at-least-once).
             log.error("cdr poll-batch failed; rewinding for redelivery", ex);
@@ -295,11 +324,36 @@ public final class CdrKafkaConsumer {
      * not commit — then nothing is published and no offset moves; the tenants that did commit are skipped by the
      * idempotency when the batch is read again. Returns the records the preprocessor refused. */
     private List<DeadLetteredCdr> WriteRows(ConsumerRecords<String, String> records) {
-        MultiTenantCdrBatch batch = preprocessor.Preprocess(ValuesOf(records));
+        List<String> values = ValuesOf(records);
+        MultiTenantCdrBatch batch = AfterAskingTheTreeAboutUnknownTenants(preprocessor.Preprocess(values), values);
         for (DeadLetteredCdr d : batch.deadLetters())
             log.warnf("cdr dead-letter [%s]: %s", d.reason(), Truncate(d.payload()));
         rowWriter.Write(batch);
         return batch.deadLetters();
+    }
+
+    /**
+     * A record for a tenant the loaded tree does not know is not a dead letter yet: a reseller provisioned at run
+     * time is unknown here until its doorbell is heard and the tree loaded. So the tree is ASKED — fetched again,
+     * not more often than the profile's interval — and the batch read again against it; only a tenant the fresh
+     * tree still does not know stays a dead letter ({@link UnknownTenantGate}). A tree that cannot be fetched
+     * throws: the batch is rewound, nothing is dead-lettered on a guess.
+     */
+    private MultiTenantCdrBatch AfterAskingTheTreeAboutUnknownTenants(MultiTenantCdrBatch batch, List<String> values) {
+        if (batch.unknownTenants().isEmpty()) return batch;
+        switch (unknownTenants.For(batch.unknownTenants())) {
+            case DeadLetter:
+                return batch;
+            case Wait:
+                throw new HoldTheBatch("the tree does not know " + batch.unknownTenants() + " and was asked less than "
+                        + opts.UnknownTenantReloadSeconds + " s ago; it is asked again in " + (unknownTenants.WaitMs() + 999) / 1000 + " s");
+            default:
+                log.infof("cdr ingest: the loaded tree does not know %s — asking the tree again", batch.unknownTenants());
+                tree.Reload();
+                MultiTenantCdrBatch again = preprocessor.Preprocess(values);
+                unknownTenants.TheTreeWasAsked(again.unknownTenants());
+                return again;
+        }
     }
 
     private static List<String> ValuesOf(ConsumerRecords<String, String> records) {

@@ -85,7 +85,7 @@ class AdViewOnPostgresLabTests {
         var runner = MySqlCdrBatchRunner.On(new PostgresEdge(new PostgresTenantTables(PostgresTenantTables.Options.Defaults())));
         var noPing = new SummaryOutboxOptions();          // Enabled = false: the ping is another test's
         processor = new CdrProcessor(registry, PostgresLab.Factory(), runner, noPing,
-                new SummaryChangeNotificationPublisher(noPing), new CdrIngestOptions(), new MediationOptions(), new IngestHealth());
+                new SummaryChangeNotificationPublisher(noPing), new CdrIngestOptions(), new MediationOptions(), new IngestHealth(), null);
         preprocessor = new CdrEventPreprocessor(registry);
         writer = new MultiTenantCdrProcessor(processor, LOG);
     }

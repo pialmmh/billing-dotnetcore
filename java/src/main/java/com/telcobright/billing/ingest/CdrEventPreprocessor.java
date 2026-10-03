@@ -13,8 +13,10 @@ import com.telcobright.billing.tenantconfigsync.model.Tenant;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The PREPROCESSOR — the pure, unit-testable piece this task adds (contract §1, §3). It turns a poll-batch of
@@ -78,6 +80,7 @@ public final class CdrEventPreprocessor {
     public MultiTenantCdrBatch Preprocess(List<String> recordValues) {
         Map<String, List<cdr>> byTenant = new LinkedHashMap<>();
         List<DeadLetteredCdr> dead = new ArrayList<>();
+        Set<String> unknownTenants = new LinkedHashSet<>();
 
         for (String value : recordValues) {
             List<CdrEvent> events;
@@ -95,6 +98,7 @@ public final class CdrEventPreprocessor {
                     ev.tenant = LastHierarchyNode(ev.resellerHierarchy);
                 String reason = Validate(ev);
                 if (reason != null) {
+                    if (reason.equals(UnknownTenant(ev.tenant))) unknownTenants.add(ev.tenant);
                     dead.add(new DeadLetteredCdr(Describe(ev), reason));
                     continue;
                 }
@@ -108,7 +112,7 @@ public final class CdrEventPreprocessor {
             Tenant context = registry.FindByDbName(e.getKey());
             tenants.add(new PerTenantCdrs(e.getKey(), context, e.getValue()));
         }
-        return new MultiTenantCdrBatch(tenants, dead);
+        return new MultiTenantCdrBatch(tenants, dead, unknownTenants);
     }
 
     /**
@@ -157,8 +161,13 @@ public final class CdrEventPreprocessor {
         if (!e.tenant.equals(leaf))
             return "resellerHierarchy leaf '" + leaf + "' != tenant '" + e.tenant + "'";
         if (registry.FindByDbName(e.tenant) == null)
-            return "unknown tenant '" + e.tenant + "'";
+            return UnknownTenant(e.tenant);
         return null;
+    }
+
+    /** The reason of a record that is sound in itself and names a tenant the loaded tree does not have. */
+    private static String UnknownTenant(String tenant) {
+        return "unknown tenant '" + tenant + "'";
     }
 
     /** Map one validated {@link CdrEvent} onto the engine {@code cdr} (contract §2 / sample B). */

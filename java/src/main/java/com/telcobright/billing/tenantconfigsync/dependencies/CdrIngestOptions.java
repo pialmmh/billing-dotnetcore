@@ -19,6 +19,10 @@ public final class CdrIngestOptions {
     /** After this many failed tries to publish one batch's dead letters the health road goes red
      * ({@code billing.cdr-ingest.dead-letter-unhealthy-after-tries}). The batch is held and retried regardless. */
     public int DeadLetterUnhealthyAfterTries = 3;
+    /** A record for a tenant the loaded tree does not know makes the ingest fetch the tree again — not more often
+     * than this many seconds ({@code billing.cdr-ingest.unknown-tenant-reload-seconds}); only a tenant the fresh
+     * tree still does not know is a dead letter. The tree's payload is large: it is not fetched once per poll. */
+    public int UnknownTenantReloadSeconds = 30;
     public int PollMs = 500;
     /**
      * Where a consumer group with NO committed offset starts ({@code billing.cdr-ingest.auto-offset-reset}):

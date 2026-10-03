@@ -75,6 +75,12 @@ class CdrKafkaConsumerTests {
         RuntimeException rowsFail;
         long nextOffset;
         CdrKafkaConsumer loop;
+        /** The tenants this process has loaded, and the ones prime-context has that it has not loaded yet. */
+        final java.util.Set<String> loadedTenants = new java.util.HashSet<>(Set.of("btcl"));
+        final java.util.Set<String> provisionedMeanwhile = new java.util.HashSet<>();
+        final java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(10_000_000);
+        boolean theTreeCannotBeFetched;
+        int timesTheTreeWasAsked;
 
         Ingest() { this(DeadLetterTopic); }
 
@@ -84,17 +90,18 @@ class CdrKafkaConsumerTests {
             opts.Topic = Topic;
             opts.DeadLetterTopic = deadLetterTopicName;
             kafka.deadLetterTopic = deadLetterTopic;
-            ITenantRegistry loaded = RatifiedWireTests.registryWith("btcl");
             ITenantRegistry registry = new ITenantRegistry() {
                 @Override public boolean IsLoaded() { return tenantConfigLoaded; }
-                @Override public Tenant FindByDbName(String dbName) { return loaded.FindByDbName(dbName); }
+                @Override public Tenant FindByDbName(String dbName) {
+                    return loadedTenants.contains(dbName) ? RatifiedWireTests.registryWith(dbName).FindByDbName(dbName) : null;
+                }
                 @Override public List<Tenant> AncestorChain(String dbName) { return List.of(); }
-                @Override public Collection<Tenant> Roots() { return loaded.Roots(); }
+                @Override public Collection<Tenant> Roots() { return List.of(); }
             };
             DeadLetterPublisher publisher = deadLetterTopicName.isBlank()
                     ? null : new DeadLetterPublisher(deadLetterTopic, deadLetterTopicName, LOG);
             loop = new CdrKafkaConsumer(kafka, new CdrEventPreprocessor(registry), this::writeRows, publisher,
-                    registry, opts, health, waits::add, LOG);
+                    registry, opts, health, this::fetchTheTree, now::get, waits::add, LOG);
             kafka.rebalance(List.of(P0));
             kafka.updateBeginningOffsets(Map.of(P0, 0L));
         }
@@ -107,6 +114,19 @@ class CdrKafkaConsumerTests {
         }
 
         int deadLettersBeforeThisBatch;
+
+        /** What the doorbell's reload does, done on the ingest's own asking: the tree as prime-context has it now. */
+        private void fetchTheTree() {
+            timesTheTreeWasAsked++;
+            if (theTreeCannotBeFetched) throw new IllegalStateException("config-manager unreachable/invalid for tenant 'btcl'");
+            loadedTenants.addAll(provisionedMeanwhile);
+        }
+
+        /** The same record again at the offset the loop rewound to (Kafka's mock forgets what it once delivered). */
+        Ingest arrivesAgainAt(long offset, String value) {
+            kafka.addRecord(new ConsumerRecord<>(Topic, 0, offset, "key", value));
+            return this;
+        }
 
         Ingest theDeadLetterTopicExists() {
             kafka.updatePartitions(DeadLetterTopic, List.of(new PartitionInfo(DeadLetterTopic, 0, null, null, null)));
@@ -285,6 +305,95 @@ class CdrKafkaConsumerTests {
         ingest.tenantConfigLoaded = true;
         ingest.turn();
         assertEquals(1, ingest.written.size());
+    }
+
+    // ── B8: a tenant the loaded tree does not know yet ───────────────────────────────────────────────────────
+
+    private static final String AViewOf(String tenant, String suffix) {
+        return RatifiedWireTests.A_REFUSED_VIEW.replace("btcl", tenant).replace("r001", suffix);
+    }
+
+    @Test
+    void a_reseller_provisioned_at_run_time_takes_its_first_record_the_tree_is_asked_not_the_record_refused() {
+        Ingest ingest = new Ingest().theDeadLetterTopicExists();
+        ingest.provisionedMeanwhile.add("res_44");                // prime-context has it; this process has not heard the doorbell yet
+        ingest.arrives(RatifiedWireTests.ONE_VIEW_TWO_TIERS);     // its first view: tiers res_44 and btcl
+
+        ingest.turn();
+
+        assertEquals(1, ingest.timesTheTreeWasAsked);
+        assertEquals(1, ingest.written.size());
+        assertEquals(List.of("res_44", "btcl"), ingest.written.get(0).tenants().stream().map(PerTenantCdrs::tenant).toList(),
+                "BOTH tiers are written — no restart, no dead letter");
+        assertEquals(0, ingest.deadLetterTopic.history().size());
+        assertEquals(1L, ingest.committed());
+    }
+
+    @Test
+    void a_tenant_the_fresh_tree_still_does_not_know_is_a_dead_letter_and_the_tree_is_not_asked_again_at_once() {
+        Ingest ingest = new Ingest().theDeadLetterTopicExists().arrives(AViewOf("res_ghost", "g001"));
+
+        ingest.turn();
+
+        assertEquals(1, ingest.timesTheTreeWasAsked);
+        assertEquals(1, ingest.deadLetterTopic.history().size());
+        assertTrue(ingest.deadLetterTopic.history().get(0).value().contains("unknown tenant 'res_ghost'"));
+        assertEquals(1L, ingest.committed(), "dead-lettered, so the offset may pass it");
+
+        ingest.now.addAndGet(4_000);
+        ingest.arrives(AViewOf("res_ghost", "g002"));
+        ingest.turn();
+
+        assertEquals(1, ingest.timesTheTreeWasAsked, "a producer that keeps naming a tenant that is not there costs one fetch an interval");
+        assertEquals(2, ingest.deadLetterTopic.history().size());
+        assertEquals(2L, ingest.committed());
+    }
+
+    @Test
+    void another_unknown_tenant_inside_the_interval_is_held_until_the_tree_may_be_asked_again() {
+        Ingest ingest = new Ingest().theDeadLetterTopicExists().arrives(AViewOf("res_ghost", "g001"));
+        ingest.turn();                                            // the tree is asked: res_ghost is a dead letter (offset 1)
+        ingest.provisionedMeanwhile.add("res_45");                // a reseller is provisioned just after that fetch
+        ingest.now.addAndGet(5_000);
+        ingest.arrives(AViewOf("res_45", "n001"));                // its first view, inside the interval
+
+        ingest.turn();
+
+        assertEquals(1, ingest.timesTheTreeWasAsked, "not asked again yet");
+        assertTrue(ingest.written.isEmpty(), "held: nothing is written");
+        assertEquals(1, ingest.deadLetterTopic.history().size(), "and it is NOT a dead letter");
+        assertEquals(1L, ingest.committed(), "its offset is not committed");
+        assertEquals(1L, ingest.kafka.position(P0), "it will be read again");
+
+        ingest.now.addAndGet(30_000);                             // the interval is over
+        ingest.arrivesAgainAt(1, AViewOf("res_45", "n001"));
+        ingest.turn();
+
+        assertEquals(2, ingest.timesTheTreeWasAsked);
+        assertEquals(List.of("res_45"), ingest.written.get(0).tenants().stream().map(PerTenantCdrs::tenant).toList());
+        assertEquals(2L, ingest.committed());
+    }
+
+    @Test
+    void when_the_tree_cannot_be_fetched_nothing_is_dead_lettered_on_a_guess() {
+        Ingest ingest = new Ingest().theDeadLetterTopicExists().arrives(AViewOf("res_44", "n001"));
+        ingest.theTreeCannotBeFetched = true;
+
+        ingest.turn();
+
+        assertEquals(1, ingest.timesTheTreeWasAsked);
+        assertEquals(0, ingest.deadLetterTopic.history().size(), "prime-context is down: the tenant may well exist");
+        assertNull(ingest.committed());
+        assertEquals(0L, ingest.kafka.position(P0), "rewound");
+    }
+
+    @Test
+    void a_batch_of_known_tenants_never_asks_the_tree() {
+        Ingest ingest = new Ingest().theDeadLetterTopicExists().arrives(RatifiedWireTests.A_REFUSED_VIEW).arrives(NOT_JSON);
+
+        ingest.turn();
+
+        assertEquals(0, ingest.timesTheTreeWasAsked, "a record that is refused for another reason is not a question for the tree");
     }
 
     // ── a new consumer group starts at 'earliest' (a profile value) ──────────────────────────────────────────

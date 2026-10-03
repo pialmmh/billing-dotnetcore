@@ -218,6 +218,9 @@ public final class ProfileConfigReader {
             if (c.DeadLetterUnhealthyAfterTries > 0) {
                 options.DeadLetterUnhealthyAfterTries = c.DeadLetterUnhealthyAfterTries;
             }
+            if (c.UnknownTenantReloadSeconds > 0) {
+                options.UnknownTenantReloadSeconds = c.UnknownTenantReloadSeconds;
+            }
         }
         return options;
     }
@@ -342,6 +345,7 @@ public final class ProfileConfigReader {
         public boolean LegacyDedupEnabled;   // cutover switch (billing.cdr-ingest.legacy-dedup-enabled)
         public String AutoOffsetReset;       // earliest (default) | latest
         public int DeadLetterUnhealthyAfterTries;
+        public int UnknownTenantReloadSeconds;
     }
 
     static final class SummaryRollupYaml {

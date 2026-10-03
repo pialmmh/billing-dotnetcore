@@ -134,6 +134,16 @@ class ProfileConfigReaderTests {
         assertEquals(7, seven.DeadLetterUnhealthyAfterTries);
     }
 
+    @Test
+    void How_often_the_tree_is_asked_about_an_unknown_tenant_is_a_profile_value() {
+        CdrIngestOptions unset = ProfileConfigReader.ReadCdrIngestFromYaml("billing:\n  cdr-ingest:\n    enabled: true\n");
+        CdrIngestOptions tenSeconds = ProfileConfigReader.ReadCdrIngestFromYaml(
+                "billing:\n  cdr-ingest:\n    enabled: true\n    unknown-tenant-reload-seconds: 10\n");
+
+        assertEquals(30, unset.UnknownTenantReloadSeconds);
+        assertEquals(10, tenSeconds.UnknownTenantReloadSeconds);
+    }
+
     // ── B6: PostgreSQL as a write target, chosen per tenant profile ──────────────────────────────────────────
 
     @Test

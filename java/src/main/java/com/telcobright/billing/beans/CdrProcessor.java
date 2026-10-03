@@ -11,6 +11,8 @@ import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
 import com.telcobright.billing.tenantconfigsync.dependencies.CdrIngestOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.MediationOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.SummaryOutboxOptions;
+import com.telcobright.billing.tenantconfigsync.internal.TenantHierarchyLoader;
+import com.telcobright.billing.tenantconfigsync.publishes.ConfigReloadTrigger;
 import com.telcobright.billing.tenantconfigsync.model.Tenant;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.PreDestroy;
@@ -44,6 +46,7 @@ public class CdrProcessor {
     private final CdrIngestOptions cdrIngest;
     private final MediationOptions mediation;
     private final IngestHealth ingestHealth;          // the ingest loop writes it; the health road reads it
+    private final TenantHierarchyLoader treeLoader;   // the ingest asks the tree itself about a tenant it does not know
 
     private CdrKafkaConsumer cdrConsumer;             // started on onStart when cdr ingest is enabled
 
@@ -51,7 +54,7 @@ public class CdrProcessor {
     public CdrProcessor(ITenantRegistry tenants, ITenantConnectionFactory connections,
             MySqlCdrBatchRunner batchRunner, SummaryOutboxOptions summary,
             SummaryChangeNotificationPublisher summaryPublisher, CdrIngestOptions cdrIngest,
-            MediationOptions mediation, IngestHealth ingestHealth) {
+            MediationOptions mediation, IngestHealth ingestHealth, TenantHierarchyLoader treeLoader) {
         this.tenants = tenants;
         this.connections = connections;
         this.batchRunner = batchRunner;
@@ -60,13 +63,15 @@ public class CdrProcessor {
         this.cdrIngest = cdrIngest;
         this.mediation = mediation;
         this.ingestHealth = ingestHealth;
+        this.treeLoader = treeLoader;
     }
 
     /** Startup seam: launch the inbound Kafka cdr ingest loop (poll -> preprocess -> ProcessBatch). When cdr
      * ingest is disabled (or no broker configured) the loop is not started and cdrs arrive via the gRPC entry.
      * Mirrors the .NET IHostedService.StartAsync + BillingBootstrap's config-event source wiring. */
     void onStart(@Observes StartupEvent ev) {
-        cdrConsumer = CdrKafkaConsumer.Start(this, tenants, cdrIngest, mediation.SwitchId, ingestHealth, log);
+        cdrConsumer = CdrKafkaConsumer.Start(this, tenants, cdrIngest, mediation.SwitchId, ingestHealth,
+                () -> treeLoader.LoadAll(ConfigReloadTrigger.UnknownTenant, null), log);
         if (cdrConsumer == null)
             log.info("CdrProcessor started (gRPC-fed; Kafka cdr ingest loop not running)");
         else

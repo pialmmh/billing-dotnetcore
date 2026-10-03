@@ -56,7 +56,7 @@ class LabSchemaForTheReportRoads {
         var noPing = new SummaryOutboxOptions();
         var processor = new CdrProcessor(registry, PostgresLab.Factory(),
                 MySqlCdrBatchRunner.On(new PostgresEdge(new PostgresTenantTables(PostgresTenantTables.Options.Defaults()))),
-                noPing, new SummaryChangeNotificationPublisher(noPing), new CdrIngestOptions(), new MediationOptions(), new IngestHealth());
+                noPing, new SummaryChangeNotificationPublisher(noPing), new CdrIngestOptions(), new MediationOptions(), new IngestHealth(), null);
         var preprocessor = new CdrEventPreprocessor(registry);
         var writer = new MultiTenantCdrProcessor(processor, LOG);
 
