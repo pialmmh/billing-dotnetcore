@@ -388,12 +388,17 @@ class CdrKafkaConsumerTests {
     }
 
     @Test
-    void a_batch_of_known_tenants_never_asks_the_tree() {
-        Ingest ingest = new Ingest().theDeadLetterTopicExists().arrives(RatifiedWireTests.A_REFUSED_VIEW).arrives(NOT_JSON);
+    void a_record_refused_for_another_reason_is_not_a_question_for_the_tree() {
+        String noDuration = RatifiedWireTests.A_REFUSED_VIEW.replace("\"durationSec\": 0,", "");
+        String aGroupNobodyKnows = RatifiedWireTests.A_REFUSED_VIEW.replace("\"serviceGroup\": 30,", "\"serviceGroup\": 7,");
+        Ingest ingest = new Ingest().theDeadLetterTopicExists()
+                .arrives(RatifiedWireTests.A_REFUSED_VIEW).arrives(NOT_JSON).arrives(noDuration).arrives(aGroupNobodyKnows);
 
         ingest.turn();
 
-        assertEquals(0, ingest.timesTheTreeWasAsked, "a record that is refused for another reason is not a question for the tree");
+        assertEquals(0, ingest.timesTheTreeWasAsked, "its tenant is known: nothing the tree could add");
+        assertEquals(3, ingest.deadLetterTopic.history().size());
+        assertEquals(4L, ingest.committed());
     }
 
     // ── a new consumer group starts at 'earliest' (a profile value) ──────────────────────────────────────────

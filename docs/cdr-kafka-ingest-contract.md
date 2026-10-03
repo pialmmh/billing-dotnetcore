@@ -3,8 +3,24 @@
 How rated CDRs flow from **routesphere (producer)** into **billing-core (consumer)** and get written, per
 reseller layer, into each layer's own schema — in one atomic transaction.
 
-> Status: **PROPOSED** — billing-core (consumer) side authored here. The routesphere (producer) side must
-> conform; the architect ratifies the wire contract (§3). Open items in §9.
+> Status: **RATIFIED** (2026-10-02) — in routesphere `docs/architecture/ad-is-a-call.md` §4, with amendments; the open
+> items of §8 are answered there and below. The wire's JSON schema — the producer is tested against it — is ad-sphere's
+> `docs/ad-as-call/contract/cdr-event.schema.json`. Calls and ad views use the same record.
+>
+> **What the ratification changed in this page** (each is marked in place):
+>
+> | | was proposed | is |
+> |---|---|---|
+> | topic | `cdr_rated` | base `cdr`; the deployed name `cdr_<root tenant>` (a profile value) |
+> | dead letters | `cdr_rated_dlq` | `cdr_dlq_<root tenant>` (a profile value); **the topic must exist** — see §6 |
+> | idempotency key | `sequenceNo` | (`tenant`, `channelCallUuid`): one record per call per tier. `sequenceNo` is the producer's running number, for order and diagnosis only |
+> | `answerTime` | required | **nullable**: null = never answered (a call) or never shown (an ad view) |
+> | `inPartnerId`, `outPartnerId`, `callRatePerMinBDT`, `inPartnerUom` | required | optional: a record nobody was admitted for carries no rate, no unit and maybe no partner. It is mediated; the service group's checklist sends it to `cdrerror` when it must not reach `cdr` |
+> | new fields | — | `serviceGroup`, `incomingRoute`, `outgoingRoute`, `additionalMetaData` (a string holding one JSON object) |
+> | `isPrepaid` | to confirm | 1 = prepaid, 2 = postpaid, 0 = unknown |
+> | `supplierCost` → `OutPartnerCost`; `packageAmount` as its own column | to confirm | yes |
+> | a new consumer group | — | starts at `earliest` (a profile value) |
+> | the final-cost feedback (§10) | proposed | not ratified here: it stays between the call switch and billing. Service group 30 does not use it |
 
 ---
 
@@ -22,7 +38,7 @@ groups by `tenant`, and runs the existing single-tenant pipeline once per tier �
 committing together across schemas.
 
 ```
-routesphere ──▶ Kafka topic `cdr_rated` (key=channelCallUuid, value=CdrEvent[] for one call)
+the switch  ──▶ Kafka topic `cdr_<root>` (key=channelCallUuid, value=CdrEvent[] for one call)
                         │
                         ▼
         ┌─────────────────────────────┐
@@ -52,10 +68,10 @@ Three components, clean SRP: **Consumer** (IO), **Preprocessor** (pure transform
 
 | Field | Value |
 |---|---|
-| **Topic** | `cdr_rated` (v1) — single stream (a call spans tenants, so NOT per-tenant) |
+| **Topic** | base `cdr`, deployed as `cdr_<root tenant>` — one stream per tenant TREE (a call spans the tree's tiers, so NOT per tier) |
 | **Key** | `channelCallUuid` (UUID string) — one partition per call → per-call ordering + dedup |
 | **Value** | UTF-8 JSON **array** = all per-tier records of ONE call (`CdrEvent[]`) |
-| **Delivery** | at-least-once; consumer commits offsets **after** the DB tx commits |
+| **Delivery** | at-least-once; the producer sends with `acks=all` and idempotence; the consumer commits offsets **after** the rows are committed AND the batch's dead letters are published (§6) |
 | **Ordering** | per-call (guaranteed by key); cross-call order not required |
 
 ### CdrEvent (one tier record) — value schema
@@ -63,33 +79,40 @@ Three components, clean SRP: **Consumer** (IO), **Preprocessor** (pure transform
 |---|---|---|---|
 | `tenant` | string | ✓ | target schema (routing). Must == last node of `resellerHierarchy` |
 | `resellerHierarchy` | string | ✓ | `admin > … > self`, ` > ` separator → `cdr.ResellerHierarchy` (NEW col) |
-| `sequenceNo` | long | ✓ | `cdr.SequenceNumber` · **idempotency key within a schema** |
+| `sequenceNo` | long | ✓ | `cdr.SequenceNumber` · the producer's running number: order and diagnosis only (not unique across producers or restarts) |
 | `callId` | string | ✓ | `cdr.UniqueBillId` (call correlation across schemas) |
-| `channelCallUuid` | string | ✓ | `cdr.ChannelCallUuid` (NEW col) + Kafka key |
-| `startTime` `answerTime` `endTime` | datetime `yyyy-MM-dd HH:mm:ss` | ✓ | `StartTime` `AnswerTime` `EndTime` |
+| `channelCallUuid` | string | ✓ | `cdr.ChannelCallUuid` (NEW col) + Kafka key · with `tenant`, **the idempotency key** |
+| `serviceGroup` | int | | **new.** Absent or 0: billing detects the group (a call). **30: an ad view — taken as given, never detected.** Any other number is REFUSED (a dead letter: "service group N is not known to this billing-core") — also 10, 11 and 15, which billing detects and nobody may state: a record that states a group is never re-classified by a guess → `cdr.ServiceGroup` |
+| `startTime` `endTime` | datetime `yyyy-MM-dd HH:mm:ss` | ✓ | `StartTime` `EndTime` — the wall clock of the root tenant's zone; written as sent, no zone converts it |
+| `answerTime` | the same, or null | | `AnswerTime`, `ConnectTime`. **Null = never answered / never shown**; the record is valid |
 | `durationSec` | decimal | ✓ | `DurationSec` |
 | `originatingCallingNumber`/`terminatingCallingNumber` | string | ✓ | `OriginatingCallingNumber`/`TerminatingCallingNumber` |
 | `originatingCalledNumber`/`terminatingCalledNumber` | string | ✓ | `OriginatingCalledNumber`/`TerminatingCalledNumber` |
 | `callerIp` / `receiverIp` | string | | `OriginatingIP` / `TerminatingIP` |
-| `hangupCause` | string | | `cdr.HangupCause` (NEW col) |
+| `hangupCause` | string | | `cdr.HangupCause` (NEW col); also `AreaCodeOrLata`, where the call lane has kept it |
+| `incomingRoute` / `outgoingRoute` | string | | **new.** `IncomingRoute` / `OutgoingRoute`. A producer that sends none (the live call feed) gets the peer addresses there, as before |
 | `channelReadCodecName` | string | | `Codec` |
 | `pdd` | float | | `PDD` |
-| `inPartnerId` / `outPartnerId` | int | ✓ | `InPartnerId` / `OutPartnerId` |
-| `isPrepaid` | int | | `PrePaid` (1=prepaid, 2=postpaid — **confirm**) |
+| `inPartnerId` / `outPartnerId` | int | | `InPartnerId` / `OutPartnerId`. Optional on the wire; a record with no in-partner goes to `cdrerror` by its group's checklist |
+| `isPrepaid` | int | | `PrePaid`: 1 = prepaid, 2 = postpaid, 0 = unknown |
 | `matchPrefixCustomer` | string | | `MatchedPrefixCustomer` |
 | `supplierPrefix` | string | | `MatchedPrefixSupplier` |
 | `ansIdTerm`/`ansPrefixTerm`/`ansIdOrig`/`ansPrefixOrig` | int/str | | `AnsIdTerm`/`AnsPrefixTerm`/`AnsIdOrig`/`AnsPrefixOrig` |
-| `callRatePerMinBDT` | decimal | ✓ | `CustomerRate` — the per-min rate this tier charges (already resolved) |
-| `inPartnerUom` | string | ✓ | `cdr.InPartnerUom` (NEW col) — `BDT`=cash, `TF_min`=package, `OTH_ea`=per-event |
+| `callRatePerMinBDT` | decimal | | `CustomerRate` — the rate this tier charges (already resolved); absent when nobody was admitted |
+| `inPartnerUom` | string | | `cdr.InPartnerUom` (NEW col) — `BDT`=cash, `TF_min`=package, `OTH_ea`=per-event; absent when nobody was admitted |
 | `idPackageAccount` | long | | `cdr.IdPackageAccount` (NEW col) |
 | `inPartnerCost` | decimal | ✓ | `InPartnerCost` — computed **cash** customer charge (0 when package) |
 | `packageAmount` | decimal | ✓ | `cdr.PackageAmount` (NEW col) — billed **package** units (0 when cash) |
-| `supplierCost` | decimal | | `OutPartnerCost` (**confirm** target) |
+| `supplierCost` | decimal | | `OutPartnerCost` |
 | `costIcxIn` / `costAnsIn` | decimal | | `CostIcxIn` / `CostAnsIn` (carried verbatim) |
 | `revenueAnsOut` / `revenueIgwOut` | decimal | | `RevenueAnsOut` / `RevenueIgwOut` (carried verbatim) |
+| `additionalMetaData` | string | | **new.** One JSON object as a string, the application's own facts → `cdr.AdditionalMetaData`, character for character. A producer that sends none (the live call feed) keeps its SIP Call-ID there |
 
 **New `cdr` columns** (extend, don't replace the engine model): `ResellerHierarchy`, `ChannelCallUuid`,
 `HangupCause`, `InPartnerUom`, `IdPackageAccount`, `PackageAmount`. Everything else maps to existing fields.
+**They are written on PostgreSQL** (the table billing-core makes there has them: `java/src/main/resources/sql/postgres/billing-tables.sql`).
+**On MySQL they are not**: the MySQL `cdr` tables have no such columns until a DDL adds them; there the six travel in the
+summary outbox blob only.
 
 ---
 
@@ -130,8 +153,13 @@ The processor consumes `MultiTenantCdrBatch` (§4).
   `res_233.acc_chargeable`, `res_233.sum_voice_*`).
 - `COMMIT` → only then commit Kafka offsets. On any error: `ROLLBACK` all, do **not** advance offsets
   (message is re-delivered; idempotency makes the replay safe).
-- **Idempotency**: `cdr` unique key on `SequenceNumber` (unique per tier-record); writes use
-  INSERT-ignore / upsert so a redelivery does not double-insert or double-count summaries.
+- **Idempotency** (ratified: on (`tenant`, `channelCallUuid`)). Under the tenant's batch lock, BEFORE mediation, a record is
+  dropped — its row, its chargeable and its share of the outbox — when (a) an earlier copy of it is in the same batch, or (b) it
+  is already written in the tenant's schema. PostgreSQL: the key is `ChannelCallUuid`, looked for in `cdr` AND `cdrerror`; a
+  unique index (`ChannelCallUuid`, `StartTime`) is the backstop. MySQL: the key is `UniqueBillId`, looked for in `cdr` only (the
+  tables have no `ChannelCallUuid` column) — a redelivered record that sits in `cdrerror` is mediated again there.
+- **What actually ships:** the tiers of a poll-batch commit tier by tier (one connection and one transaction per tenant), not as
+  one cross-schema transaction; the idempotency makes the redelivery of a half-written batch safe.
 
 Write-layer change needed: thread a `schema` (table prefix) through `CdrBatch` so `CdrWriter` /
 `ChargeableWriter` / `CdrSummaryContext` qualify table names; open one cross-schema connection (the DB user
@@ -139,7 +167,12 @@ needs INSERT on every tenant schema).
 
 ---
 
-## 5. Per-tier rating — billing does the FINAL rating (this is the whole point)
+## 5. Per-tier rating — billing does the FINAL rating of a CALL (this is the whole point)
+
+> **Service group 30 (an ad view) is the exception: it is PRE-RATED.** The switch's settle step has already charged the
+> ledger; billing looks no rate up and charges nothing again. Its family builds ONE customer chargeable from the record's
+> own settled amounts (`inPartnerCost` or `packageAmount`, in `inPartnerUom`), and the cdr row keeps the wire's amounts as
+> they came. Everything below is about calls.
 
 Every call is rated **twice**:
 
@@ -159,9 +192,19 @@ Needs each tier's rate plan loaded (the same resolution admission uses) — the 
 ---
 
 ## 6. Delivery semantics summary
-- **At-least-once** + **idempotent writes** (dedup on `SequenceNumber`) = effectively-once billing.
-- **Offsets after commit**; rollback ⇒ replay.
-- **Dead-letter** topic `cdr_rated_dlq` for records that fail validation/mapping (poison-message safety).
+- **At-least-once** + **idempotency** on (`tenant`, `channelCallUuid`) (§4) = effectively-once billing.
+- **An offset is never committed past a record that is neither written nor dead-lettered.** The order of a poll-batch: every
+  tier's rows are committed → the records that failed decode / validation are published to the dead-letter topic
+  (`acks=all`) → the offsets are committed. A tier that does not commit ⇒ the batch is rewound and read again.
+- **A dead letter that cannot be published HOLDS the batch**: its rows stay committed, the partitions are paused, the
+  publish is tried again every 5 s (one ERROR line per try, naming the topic), and after
+  `dead-letter-unhealthy-after-tries` tries `/q/health` goes DOWN. Nothing is consumed meanwhile.
+- **The dead-letter topic must EXIST** (`cdr_dlq_<root tenant>`; `billing.cdr-ingest.dead-letter-topic`). The ingest
+  consumes nothing until it does — it says so, `/q/health` is DOWN, and it starts by itself once the topic is there.
+  billing-core creates no topic.
+- **A tenant the loaded tree does not know** is not a dead letter at once: the tree is fetched again (not more often than
+  `unknown-tenant-reload-seconds`) and the batch read again; only a tenant the fresh tree still does not know is one.
+- **A new consumer group starts at `earliest`** (`auto-offset-reset`, a profile value).
 - **Ordering** per call via `channelCallUuid` key.
 
 ---
@@ -179,16 +222,17 @@ gRPC `ProcessCdrBatch` stays as a **single-tenant test entry** (or is realigned 
 
 ---
 
-## 8. Open items (please confirm)
-1. **Topic name** — `cdr_rated`? (and DLQ `cdr_rated_dlq`)
-2. **Final-cost feedback** (§10) — topic name `cdr_final_cost`? one message per call carrying all tiers?
-3. **Mapping targets** to confirm: `supplierCost → OutPartnerCost`?; `packageAmount` as a NEW column (vs reuse `XAmount`/`YAmount`/`ZAmount`)?; `isPrepaid` 1=prepaid/2=postpaid?
-4. **Message framing** — value is an array = ONE call's tiers (confirmed by your examples)? Or could a message carry multiple calls?
-5. **Idempotency key** — `SequenceNumber` unique per record (good), or prefer `channelCallUuid`+`tenant`?
+## 8. The open items — answered (ad-is-a-call §4)
+1. **Topic name** — base `cdr`, deployed `cdr_<root tenant>`; dead letters `cdr_dlq_<root tenant>`. Both are profile values.
+2. **Final-cost feedback** (§10) — not ratified; it stays between the call switch and billing. Service group 30 does not use it.
+3. **Mapping targets** — `supplierCost → OutPartnerCost`: yes; `packageAmount` as its own column: yes; `isPrepaid`: 1 = prepaid, 2 = postpaid, 0 = unknown.
+4. **Message framing** — one message = a JSON array = every tier's record of ONE call, the leaf first.
+5. **Idempotency key** — (`tenant`, `channelCallUuid`). `sequenceNo` is not unique across producers or restarts.
 
-## 9. Routesphere ratification
-The architect must ratify §2 (inbound `cdr_rated`) **and** §10 (outbound `cdr_final_cost`) so the routesphere
-producer/consumer and billing-core agree. Until ratified this is the billing-core-proposed contract.
+## 9. Ratification
+§2 (the inbound wire) is ratified, as amended above. §10 (the outbound `cdr_final_cost`) is NOT: it is still this page's
+proposal. routesphere-core's own producer still sends one `{sequenceNo, cdr}` object per row; billing-core accepts that
+shape too (`RatedCdrEnvelope`) until it moves to the array.
 
 ## 10. Outbound — final cost back to routesphere (the reimbursement loop)
 
@@ -214,7 +258,7 @@ routesphere matches each tier by `channelCallUuid` + `partnerId` to its reservat
 
 ## 11. Sample payloads — Call 1 (outgoing, 2 tiers)
 
-### A — routesphere → Kafka `cdr_rated`  (key = channelCallUuid; value = the call's tier records)
+### A — the switch → Kafka `cdr_<root>`  (key = channelCallUuid; value = the call's tier records)
 ```json
 [
   { "tenant":"res_233", "resellerHierarchy":"telcobright > res_233",
