@@ -94,6 +94,13 @@
             <version>${mysql.connector.version}</version>
         </dependency>
 
+        <!-- Data: the PostgreSQL write target (billing.datasource.kind: postgresql) — a tenant is a schema of the
+             switch database. Plain JDBC, like the MySQL adapters; the version is the Quarkus BOM's. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+
         <!-- Tests (JUnit 5). Pure-logic tests run as plain Jupiter tests; no Quarkus boot needed. -->
         <dependency>
             <groupId>io.quarkus</groupId>

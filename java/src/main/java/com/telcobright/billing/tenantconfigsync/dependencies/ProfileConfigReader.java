@@ -152,16 +152,37 @@ public final class ProfileConfigReader {
         BillingYaml billing = billingOf(yaml);
         DatasourceYaml ds = billing != null ? billing.Datasource : null;
         if (ds != null) {
+            options.Kind = DatasourceKindOf(ds.Kind);
             options.Host = ds.Host != null ? ds.Host : "";
-            if (ds.Port > 0) {
-                options.Port = ds.Port;
-            }
+            options.Port = ds.Port > 0 ? ds.Port : (options.IsPostgres() ? 5432 : options.Port);
+            options.Database = ds.Database != null ? ds.Database : "";
+            ReadPostgresBlock(ds.Postgres, options);
             options.AdminDb = ds.AdminDb != null ? ds.AdminDb : "";
             options.ResellerDbPrefix = ds.ResellerDbPrefix != null ? ds.ResellerDbPrefix : options.ResellerDbPrefix;
             options.Username = ds.Username != null ? ds.Username : "";
             options.Password = ds.Password != null ? ds.Password : "";
         }
         return options;
+    }
+
+    /** {@code mysql} (also when the key is absent) or {@code postgresql}; any other word is a refusal at start. */
+    private static String DatasourceKindOf(String value) {
+        if (value == null || value.isBlank()) return DatasourceOptions.MySql;
+        String word = value.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!word.equals(DatasourceOptions.MySql) && !word.equals(DatasourceOptions.PostgreSql)) {
+            throw new IllegalStateException("billing.datasource.kind must be 'mysql' or 'postgresql', not '" + value + "'");
+        }
+        return word;
+    }
+
+    /** {@code billing.datasource.postgres}: an absent key keeps its default; an empty role / an empty list switches
+     * that grant off. */
+    private static void ReadPostgresBlock(PostgresYaml pg, DatasourceOptions options) {
+        if (pg == null) return;
+        if (pg.SummaryServiceRole != null) options.PostgresSummaryServiceRole = pg.SummaryServiceRole.trim();
+        if (pg.ReaderRoles != null) options.PostgresReaderRoles = List.copyOf(pg.ReaderRoles);
+        if (pg.MonthsBack != null) options.PostgresMonthsBack = pg.MonthsBack;
+        if (pg.MonthsAhead != null) options.PostgresMonthsAhead = pg.MonthsAhead;
     }
 
     static SummaryOutboxOptions ReadSummaryFromYaml(String yaml) {
@@ -331,7 +352,17 @@ public final class ProfileConfigReader {
         public int SegmentSize;
     }
 
+    static final class PostgresYaml {
+        public String SummaryServiceRole;
+        public List<String> ReaderRoles;
+        public Integer MonthsBack;
+        public Integer MonthsAhead;
+    }
+
     static final class DatasourceYaml {
+        public String Kind;
+        public String Database;
+        public PostgresYaml Postgres;
         public String Host;
         public int Port;
         public String AdminDb;

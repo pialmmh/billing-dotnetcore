@@ -9,4 +9,10 @@ package com.telcobright.billing.mediation.sql;
  */
 public interface ISqlExecutor {
     int ExecuteNonQuery(String sql);
+
+    /** The engine this executor's connection speaks: the writers shape their literals (and the {@code cdr} row's
+     * columns) for it. MySQL unless the executor says otherwise — every executor before PostgreSQL is MySQL's. */
+    default SqlDialect Dialect() {
+        return SqlDialect.MySql;
+    }
 }

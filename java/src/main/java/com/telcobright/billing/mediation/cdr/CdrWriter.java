@@ -22,9 +22,11 @@ public final class CdrWriter {
     public static int Write(ISqlExecutor sql, List<cdr> cdrs, int segmentSize, String table) {
         if (cdrs.isEmpty()) return 0;
 
-        var header = "insert into " + table + " (" + cdr.ExtInsertColumns + ") values ";
+        // The columns and the literals are the engine's (CdrRowSql): MySQL's legacy 104, or PostgreSQL's 110.
+        var dialect = sql.Dialect();
+        var header = "insert into " + table + " (" + CdrRowSql.Columns(dialect) + ") values ";
         var values = new ArrayList<StringBuilder>(cdrs.size());
-        for (var c : cdrs) values.add(c.GetExtInsertValues());
+        for (var c : cdrs) values.add(CdrRowSql.Values(c, dialect));
         return BatchSqlWriter.WriteInsertsInSegments(sql, header, values, segmentSize);
     }
 

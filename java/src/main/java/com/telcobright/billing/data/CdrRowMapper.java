@@ -1,6 +1,8 @@
 package com.telcobright.billing.data;
 
+import com.telcobright.billing.mediation.cdr.CdrRowSql;
 import com.telcobright.billing.mediation.engine.models.cdr;
+import com.telcobright.billing.mediation.sql.SqlDialect;
 
 import java.lang.reflect.Field;
 import java.math.BigDecimal;
@@ -21,29 +23,46 @@ import java.util.Map;
 public final class CdrRowMapper {
     private CdrRowMapper() {}
 
-    // column name -> field, only for columns that HAVE a like-named public field. Built once.
-    private static final Map<String, Field> FIELDS = new LinkedHashMap<>();
-    static {
-        for (String raw : cdr.ExtInsertColumns.split(",")) {
+    // column name -> field, only for columns that HAVE a like-named public field. Built once per engine: the
+    // PostgreSQL table also has the ratified wire's six columns, and a row read back must keep them.
+    private static final Map<String, Field> FIELDS = FieldsOf(SqlDialect.MySql);
+    private static final Map<String, Field> POSTGRES_FIELDS = FieldsOf(SqlDialect.PostgreSql);
+
+    private static Map<String, Field> FieldsOf(SqlDialect dialect) {
+        Map<String, Field> fields = new LinkedHashMap<>();
+        for (String raw : CdrRowSql.Columns(dialect).split(",")) {
             String col = raw.trim();
             try {
-                FIELDS.put(col, cdr.class.getField(col));
+                fields.put(col, cdr.class.getField(col));
             } catch (NoSuchFieldException ignored) {
-                // a header column with no engine field (e.g. SignalingStartTime) — not read/written, skip.
+                // a header column with no engine field — not read/written, skip.
             }
         }
+        return fields;
+    }
+
+    private static Map<String, Field> Fields(SqlDialect dialect) {
+        return dialect == SqlDialect.PostgreSql ? POSTGRES_FIELDS : FIELDS;
     }
 
     /** The comma-separated column list to SELECT (only the columns we can map back). */
     public static String SelectColumns() {
-        return String.join(",", FIELDS.keySet());
+        return SelectColumns(SqlDialect.MySql);
+    }
+
+    public static String SelectColumns(SqlDialect dialect) {
+        return String.join(",", Fields(dialect).keySet());
     }
 
     /** Map the CURRENT row of {@code rs} (selected via {@link #SelectColumns()}) into a fresh cdr. */
     public static cdr FromResultSet(ResultSet rs) throws SQLException {
+        return FromResultSet(rs, SqlDialect.MySql);
+    }
+
+    public static cdr FromResultSet(ResultSet rs, SqlDialect dialect) throws SQLException {
         cdr c = new cdr();
-        for (Map.Entry<String, Field> e : FIELDS.entrySet()) {
-            Object v = ReadValue(rs, e.getKey(), e.getValue().getType());
+        for (Map.Entry<String, Field> e : Fields(dialect).entrySet()) {
+            Object v = ReadValue(rs, e.getKey(), e.getValue().getType(), dialect);
             try {
                 e.getValue().set(c, v);
             } catch (IllegalAccessException ex) {
@@ -53,7 +72,10 @@ public final class CdrRowMapper {
         return c;
     }
 
-    private static Object ReadValue(ResultSet rs, String col, Class<?> type) throws SQLException {
+    private static Object ReadValue(ResultSet rs, String col, Class<?> type, SqlDialect dialect) throws SQLException {
+        // PostgreSQL: the column is a timestamp WITHOUT time zone and is read as the wall clock it holds — no zone,
+        // not even the JVM's, takes part (a java.sql.Timestamp would go through the JVM's zone and back).
+        if (type == LocalDateTime.class && dialect == SqlDialect.PostgreSql) return rs.getObject(col, LocalDateTime.class);
         if (type == String.class)        return rs.getString(col);
         if (type == BigDecimal.class)    return rs.getBigDecimal(col);
         if (type == LocalDateTime.class) { Timestamp t = rs.getTimestamp(col); return t == null ? null : t.toLocalDateTime(); }

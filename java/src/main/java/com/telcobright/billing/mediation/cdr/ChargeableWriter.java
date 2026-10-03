@@ -28,7 +28,7 @@ public final class ChargeableWriter {
         var values = new ArrayList<StringBuilder>(chargeables.size());
         for (var c : chargeables) {
             if (c.id <= 0) c.id = ids.GetNewCounter("acc_chargeable");
-            values.add(c.GetExtInsertValues());
+            values.add(ChargeableRowSql.Values(c, sql.Dialect()));
         }
         return BatchSqlWriter.WriteInsertsInSegments(sql, header, values, segmentSize);
     }

@@ -133,4 +133,69 @@ class ProfileConfigReaderTests {
         assertEquals("cdr_dlq_btcl", unset.DeadLetterTopic);
         assertEquals(7, seven.DeadLetterUnhealthyAfterTries);
     }
+
+    // ── B6: PostgreSQL as a write target, chosen per tenant profile ──────────────────────────────────────────
+
+    @Test
+    void A_postgresql_datasource_names_its_kind_its_switch_database_and_the_settings_of_its_tables() {
+        DatasourceOptions ds = ProfileConfigReader.ReadDatasourceFromYaml(
+                "billing:\n" +
+                "  datasource:\n" +
+                "    kind: PostgreSQL\n" +
+                "    host: \"10.10.199.20\"\n" +
+                "    database: \"routesphere\"\n" +
+                "    username: \"billing_core\"\n" +
+                "    postgres:\n" +
+                "      summary-service-role: \"sum_ro\"\n" +
+                "      reader-roles: [\"ad_sphere\", \"audit\"]\n" +
+                "      months-back: 2\n" +
+                "      months-ahead: 6\n");
+
+        assertTrue(ds.IsPostgres());
+        assertEquals("postgresql", ds.Kind);                   // any letter case in the file
+        assertEquals("routesphere", ds.Database);
+        assertEquals(5432, ds.Port, "PostgreSQL's port when the profile names none");
+        assertEquals("sum_ro", ds.PostgresSummaryServiceRole);
+        assertEquals(java.util.List.of("ad_sphere", "audit"), ds.PostgresReaderRoles);
+        assertEquals(2, ds.PostgresMonthsBack);
+        assertEquals(6, ds.PostgresMonthsAhead);
+    }
+
+    @Test
+    void A_datasource_that_does_not_say_its_kind_is_mysql_as_every_profile_before() {
+        DatasourceOptions ds = ProfileConfigReader.ReadDatasourceFromYaml(
+                "billing:\n  datasource:\n    host: \"103.95.96.77\"\n    admin-db: \"telcobright\"\n");
+
+        assertFalse(ds.IsPostgres());
+        assertEquals("mysql", ds.Kind);
+        assertEquals(3306, ds.Port);
+        assertEquals("", ds.Database);
+    }
+
+    @Test
+    void The_postgresql_tables_settings_have_defaults_and_an_empty_role_switches_its_grant_off() {
+        DatasourceOptions defaults = ProfileConfigReader.ReadDatasourceFromYaml(
+                "billing:\n  datasource:\n    kind: postgresql\n    host: \"h\"\n    port: 6432\n");
+        DatasourceOptions off = ProfileConfigReader.ReadDatasourceFromYaml(
+                "billing:\n  datasource:\n    kind: postgresql\n    host: \"h\"\n    postgres:\n"
+                        + "      summary-service-role: \"\"\n      reader-roles: []\n");
+
+        assertEquals(6432, defaults.Port);
+        assertEquals("summary_service", defaults.PostgresSummaryServiceRole);
+        assertEquals(java.util.List.of("ad_sphere"), defaults.PostgresReaderRoles);
+        assertEquals(1, defaults.PostgresMonthsBack);
+        assertEquals(3, defaults.PostgresMonthsAhead);
+        assertEquals("", off.PostgresSummaryServiceRole);
+        assertTrue(off.PostgresReaderRoles.isEmpty());
+        assertEquals(1, off.PostgresMonthsBack, "a key that is absent keeps its default");
+    }
+
+    @Test
+    void A_datasource_kind_that_is_neither_engine_is_refused_at_start() {
+        IllegalStateException refused = assertThrows(IllegalStateException.class,
+                () -> ProfileConfigReader.ReadDatasourceFromYaml("billing:\n  datasource:\n    kind: oracle\n    host: \"h\"\n"));
+
+        assertTrue(refused.getMessage().contains("billing.datasource.kind must be 'mysql' or 'postgresql', not 'oracle'"),
+                refused.getMessage());
+    }
 }

@@ -1,6 +1,6 @@
 package com.telcobright.billing.beans;
 
-import com.telcobright.billing.data.MySqlConnectionFactory;
+import com.telcobright.billing.data.ITenantConnectionFactory;
 import com.telcobright.billing.data.MySqlSummaryBatchRunner;
 import com.telcobright.billing.ingest.GracefulDrain;
 import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
@@ -38,7 +38,7 @@ public class SummaryRollupConsumer {
     private static final int DrainTimeoutSeconds = 15;   // cutover drain budget for the in-flight sweep
 
     private final ITenantRegistry tenants;
-    private final MySqlConnectionFactory connections;
+    private final ITenantConnectionFactory connections;
     private final MySqlSummaryBatchRunner runner;
     private final SummaryRollupOptions opts;
 
@@ -50,7 +50,7 @@ public class SummaryRollupConsumer {
     private volatile boolean running = true;
 
     @Inject
-    public SummaryRollupConsumer(ITenantRegistry tenants, MySqlConnectionFactory connections,
+    public SummaryRollupConsumer(ITenantRegistry tenants, ITenantConnectionFactory connections,
             MySqlSummaryBatchRunner runner, SummaryRollupOptions opts) {
         this.tenants = tenants;
         this.connections = connections;
@@ -63,6 +63,7 @@ public class SummaryRollupConsumer {
             log.info("summary roll-up disabled (billing.summary-rollup.enabled=false) — outbox rows accumulate until a consumer drains them");
             return;
         }
+        RefuseOnPostgres(connections.Dialect());
         if (!connections.IsConfigured()) {
             log.warn("summary roll-up enabled but datasource credentials are not configured — NOT starting");
             return;
@@ -155,5 +156,17 @@ public class SummaryRollupConsumer {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    /**
+     * This in-process roll-up folds the outbox into {@code sum_voice_*} with MySQL's statements, and on PostgreSQL
+     * the summaries are the summary service's own tables (ad-is-a-call §3). A PostgreSQL profile that switches it on
+     * is a mistake that would fail at its first sweep and then every five seconds: it is refused at start, in words.
+     */
+    static void RefuseOnPostgres(com.telcobright.billing.mediation.sql.SqlDialect dialect) {
+        if (dialect == com.telcobright.billing.mediation.sql.SqlDialect.PostgreSql)
+            throw new IllegalStateException("billing.summary-rollup.enabled is true on a PostgreSQL datasource"
+                    + " (billing.datasource.kind: postgresql): the in-process roll-up is MySQL's — on PostgreSQL the"
+                    + " summary service owns the summary tables. Set billing.summary-rollup.enabled: false.");
     }
 }

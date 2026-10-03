@@ -7,8 +7,26 @@ package com.telcobright.billing.tenantconfigsync.dependencies;
  * username + password live inline in the profile YAML (no OpenBao); they are read by ProfileConfigReader.
  */
 public final class DatasourceOptions {
+    public static final String MySql = "mysql";
+    public static final String PostgreSql = "postgresql";
+
+    /** The write target of this profile's tenant ({@code billing.datasource.kind}): {@code mysql} (the default —
+     * a tenant is a database) or {@code postgresql} (a tenant is a schema of {@link #Database}). */
+    public String Kind = MySql;
     public String Host = "";
     public int Port = 3306;
+    /** PostgreSQL only: the one switch database every tenant is a schema of ({@code billing.datasource.database}). */
+    public String Database = "";
+    /** PostgreSQL only ({@code billing.datasource.postgres.*}): the role that reads billing-core's tables and deletes
+     * from the summary outbox; the roles that only read; the month partitions a new table is made with. */
+    public String PostgresSummaryServiceRole = "summary_service";
+    public java.util.List<String> PostgresReaderRoles = java.util.List.of("ad_sphere");
+    public int PostgresMonthsBack = 1;
+    public int PostgresMonthsAhead = 3;
+
+    public boolean IsPostgres() {
+        return PostgreSql.equals(Kind);
+    }
 
     /** Admin/operator schema; each reseller owns {@link #ResellerDbPrefix} + its id. */
     public String AdminDb = "";

@@ -26,12 +26,17 @@ import java.util.Set;
  * The TOP-LEVEL transaction boundary for ONE tenant's cdr batch — the legacy CdrJobProcessor's
  * {@code set autocommit=0 … commit / rollback}, at the high-level entry. It owns the connection's SINGLE
  * transaction: begin -&gt; run the whole {@link CdrPipeline} pipeline (which only EMITS SQL through the
- * connection-bound {@link MySqlExecutor}; NO inner class/method commits or rolls back) -&gt; commit. On ANY
- * exception the WHOLE batch rolls back. All-or-nothing: cdr + cdrerror + chargeables + summaries persist
+ * connection-bound executor; NO inner class/method commits or rolls back) -&gt; commit. On ANY
+ * exception the WHOLE batch rolls back. All-or-nothing: cdr + cdrerror + chargeables + the summary outbox row persist
  * together or not at all.
  *
- * <p>The caller owns the per-call connection (the architect's single-MySqlConnection rule); this owns the one
- * transaction around the batch. The future job-fetch layer hands the decoded cdrs here.</p>
+ * <p>The caller owns the per-call connection (the architect's single-connection rule); this owns the one
+ * transaction around the batch.</p>
+ *
+ * <p><b>One runner, two engines.</b> The transaction, its order and the pipeline are the same on MySQL and on
+ * PostgreSQL; what differs is the {@link DatasourceEdge} (the schema's name, the batch lock, the tables, the
+ * idempotency key, the literals). {@link #Default()} is MySQL's, as it always was; {@link #On(DatasourceEdge)}
+ * takes the edge of the profile's datasource. (The class keeps its name from the days it had one engine.)</p>
  *
  * <p>FAITHFUL-PORT NOTE (MySqlConnector -&gt; JDBC): there is no {@code MySqlTransaction} object. The legacy
  * {@code conn.BeginTransaction()} becomes {@code conn.setAutoCommit(false)}, {@code tx.Commit()} becomes
@@ -44,13 +49,30 @@ public final class MySqlCdrBatchRunner {
     private static final Logger log = Logger.getLogger(MySqlCdrBatchRunner.class);
 
     private final CdrPipeline _processor;
+    private final DatasourceEdge _edge;
 
     public MySqlCdrBatchRunner(CdrPipeline processor) {
-        _processor = processor;
+        this(processor, new MySqlEdge());
     }
 
+    public MySqlCdrBatchRunner(CdrPipeline processor, DatasourceEdge edge) {
+        _processor = processor;
+        _edge = edge;
+    }
+
+    /** The MySQL runner — every deployment before PostgreSQL, and every existing caller. */
     public static MySqlCdrBatchRunner Default() {
         return new MySqlCdrBatchRunner(CdrPipeline.Default());
+    }
+
+    /** The runner of the datasource whose edge this is (the profile's {@code billing.datasource.kind}). */
+    public static MySqlCdrBatchRunner On(DatasourceEdge edge) {
+        return new MySqlCdrBatchRunner(CdrPipeline.Default(), edge);
+    }
+
+    /** The engine this runner writes for. */
+    public com.telcobright.billing.mediation.sql.SqlDialect Dialect() {
+        return _edge.Dialect();
     }
 
     public CdrBatchResult Run(Connection conn, MediationContext mediation,
@@ -84,9 +106,10 @@ public final class MySqlCdrBatchRunner {
      * {@code cdr}. The source {@code cdrerror} rows (by {@code IdCall}) are DELETED inside the SAME transaction
      * as the re-write, so the transition is all-or-nothing: either {@code cdrerror -> cdr + chargeable +
      * summary} commits, or every source row stays put in {@code cdrerror} (rollback). Idempotent — a cdr whose
-     * {@code UniqueBillId} is already in the {@code cdr} table is dropped by {@link #FilterAlreadyBilled} (the
-     * unique index is the hard backstop), so re-running never double-bills; a call still failing is simply
-     * re-written to {@code cdrerror} with its fresh reason.
+     * key is already in the {@code cdr} table is dropped by the idempotency (the unique index is the hard
+     * backstop), so re-running never double-bills; a call still failing is simply re-written to {@code cdrerror}
+     * with its fresh reason. (The source rows are deleted BEFORE the idempotency reads the tables, so where the
+     * key is also looked for in {@code cdrerror} the rows being reprocessed are not found there.)
      */
     public CdrBatchResult RunReprocess(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs, List<Long> sourceIdCalls,
@@ -98,80 +121,161 @@ public final class MySqlCdrBatchRunner {
         }, false);
     }
 
+    /**
+     * ONE batch at a time per tenant schema. The lock is held across the whole batch INCLUDING the commit, which
+     * gives two guarantees the pipeline relies on:
+     * (a) summary_affected outbox ids become COMMIT-ordered, so the summary-service's "id &gt; offset" cursor can
+     *     never skip a row that commits late out of order;
+     * (b) the max(id) seeding of MaxIdSeededAutoIncrementManager is race-free.
+     * (The legacy equivalent was the single job runner per tenant.)
+     */
     private CdrBatchResult RunInternal(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs,
             IAutoIncrementManager ids, int segmentSize, InTxAction preProcess, boolean legacyDedup) {
+        BeginTransaction(conn);
+        String schema = _edge.SchemaOf(conn);
+        String batchLock = "billing_batch_" + schema;
+        _edge.AcquireBatchLock(conn, batchLock);
+        try {
+            _edge.PrepareSchema(conn, schema);
+            if (ids == null) ids = new MaxIdSeededAutoIncrementManager(conn);
+            // Reprocess-only: delete the source cdrerror rows here, INSIDE the tx and under the lock, so the
+            // move to cdr is atomic (rollback restores them). No-op for the normal ingest path (null action).
+            if (preProcess != null) preProcess.run(conn);
+            List<cdr> toProcess = DropWhatMustNotBeBilledAgain(conn, cdrs, legacyDedup, batchLock);
+            // the pipeline writes EVERYTHING through this connection-bound store — one connection, one transaction.
+            var batch = new CdrBatch(mediation, partners, toProcess, _edge.Executor(conn), ids, segmentSize);
+            var result = _processor.Process(batch);
+            conn.commit();        // the ONE commit for the batch
+            return result;
+        } catch (Throwable t) {
+            Rollback(conn, t);    // the ONE rollback — undo the whole batch
+            _edge.BatchFailed(schema);
+            if (t instanceof RuntimeException re) throw re;
+            if (t instanceof Error err) throw err;
+            throw new RuntimeException(t);   // wrap checked (e.g. SQLException from commit)
+        } finally {
+            _edge.ReleaseBatchLock(conn, batchLock);    // after commit/rollback — the lock covers the commit
+            RestoreAutoCommit(conn);
+        }
+    }
+
+    private static void BeginTransaction(Connection conn) {
         try {
             conn.setAutoCommit(false);   // conn.BeginTransaction()
         } catch (SQLException e) {
             throw new RuntimeException(e);
         }
-        // ONE batch at a time per tenant schema. The named lock is held across the whole
-        // batch INCLUDING the commit, which gives two guarantees the pipeline relies on:
-        // (a) summary_affected outbox ids become COMMIT-ordered, so the summary-service's
-        //     "id > offset" cursor can never skip a row that commits late out of order;
-        // (b) the max(id) seeding of MaxIdSeededAutoIncrementManager is race-free.
-        // (The legacy equivalent was the single job runner per tenant.)
-        String batchLock = TenantBatchLockName(conn);
-        AcquireLock(conn, batchLock);
+    }
+
+    private static void Rollback(Connection conn, Throwable cause) {
         try {
-            if (ids == null) ids = new MaxIdSeededAutoIncrementManager(conn);
-            // Reprocess-only: delete the source cdrerror rows here, INSIDE the tx and under the lock, so the
-            // move to cdr is atomic (rollback restores them). No-op for the normal ingest path (null action).
-            if (preProcess != null) preProcess.run(conn);
-            // CUTOVER legacy-ownership dedup (feature-gated; OFF by default). An ADDITIONAL layer BEFORE the
-            // normal UniqueBillId idempotency: during the legacy→new cutover a cdr whose SequenceNumber is
-            // already owned by legacy (present in THIS tenant's cdr OR cdrerror, on this same connection/schema)
-            // is dropped — legacy cdr = billed, legacy cdrerror = failed-and-NOT-recovered; either way NEW
-            // billing must not touch it. Only seqs in NEITHER table proceed. Batched (one query per table) and
-            // FAIL-SAFE (a lookup SQLException propagates → whole batch rolls back / retries → never a silent bill).
-            List<cdr> afterLegacy = cdrs;
-            if (legacyDedup) {
-                afterLegacy = FilterLegacyOwned(cdrs, seqs -> jdbcOwnedSeqs(conn, seqs));
-                int skippedLegacy = cdrs.size() - afterLegacy.size();
-                if (skippedLegacy > 0)
-                    log.infof("cutover legacy-dedup: skipped %d cdr(s) owned by legacy (seq in cdr/cdrerror) in %s",
-                            skippedLegacy, batchLock);
-            }
-            // IDEMPOTENCY (T3), under the per-schema lock (so the SELECT sees the true committed state and no
-            // concurrent batch can write between the check and our insert), in two steps:
-            //  (1) a later copy of a record INSIDE this batch is dropped — one poll can deliver one call twice (a
-            //      producer's retry, a republish after its restart). The first copy wins. Without this the
-            //      pipeline's own duplicate guard aborts the batch, the ingest rewinds, and the same poll fails
-            //      again — for ever;
-            //  (2) a record whose key is ALREADY written in this schema is dropped. A redelivered Kafka poll-batch
-            //      (offsets commit only after the DB commit — at-least-once) therefore cannot double-write /
-            //      double-bill. The unique index on the key is the hard backstop if two processes ever race past this.
-            IdempotencyKey key = IdempotencyKey.UniqueBillId;
-            List<cdr> firstCopies = DropLaterCopiesInTheBatch(afterLegacy, key);
-            if (firstCopies.size() < afterLegacy.size())
-                log.infof("idempotency: dropped %d later cop(ies) of a record inside one batch in %s",
-                        afterLegacy.size() - firstCopies.size(), batchLock);
-            List<cdr> toProcess = DropWhatIsAlreadyWritten(conn, firstCopies, key);
-            if (toProcess.size() < firstCopies.size())
-                log.infof("idempotency: skipped %d already-written cdr(s) in %s (redelivery)",
-                        firstCopies.size() - toProcess.size(), batchLock);
-            // the pipeline writes EVERYTHING through this connection-bound store — one connection, one transaction.
-            var store = new MySqlExecutor(conn);
-            var batch = new CdrBatch(mediation, partners, toProcess, store, ids, segmentSize);
-            var result = _processor.Process(batch);
-            conn.commit();        // the ONE commit for the batch
-            return result;
-        } catch (Throwable t) {
-            try {
-                conn.rollback();  // the ONE rollback — undo the whole batch
-            } catch (SQLException re) {
-                t.addSuppressed(re);
-            }
-            if (t instanceof RuntimeException re) throw re;
-            if (t instanceof Error err) throw err;
-            throw new RuntimeException(t);   // wrap checked (e.g. SQLException from commit)
-        } finally {
-            ReleaseLock(conn, batchLock);    // after commit/rollback — the lock covers the commit
-            try {
-                conn.setAutoCommit(true);
-            } catch (SQLException ignored) {
-                // restore best-effort; the connection is the caller's to close.
+            conn.rollback();
+        } catch (SQLException re) {
+            cause.addSuppressed(re);
+        }
+    }
+
+    private static void RestoreAutoCommit(Connection conn) {
+        try {
+            conn.setAutoCommit(true);
+        } catch (SQLException ignored) {
+            // restore best-effort; the connection is the caller's to close.
+        }
+    }
+
+    /**
+     * The three filters a batch passes before mediation, each under the tenant lock (so its reads see the true
+     * committed state and no other batch can write between the check and our insert):
+     * <ol>
+     * <li><b>CUTOVER legacy-ownership dedup</b> (feature-gated; OFF by default): during the legacy→new cutover a
+     *     cdr whose SequenceNumber is already owned by legacy (present in THIS tenant's cdr OR cdrerror) is
+     *     dropped — legacy cdr = billed, legacy cdrerror = failed-and-NOT-recovered; either way NEW billing must
+     *     not touch it. Batched (one query per table) and FAIL-SAFE (a lookup SQLException propagates → the whole
+     *     batch rolls back / retries → never a silent bill).</li>
+     * <li><b>A later copy of a record in the SAME batch</b> is dropped: one poll can deliver one call twice (a
+     *     producer's retry, a republish after its restart). The first copy wins. Without this the pipeline's own
+     *     duplicate guard aborts the batch, the ingest rewinds, and the same poll fails again — for ever.</li>
+     * <li><b>Cross-batch idempotency (T3)</b>: a record whose key is ALREADY written in this schema is dropped. A
+     *     redelivered Kafka poll-batch (offsets commit only after the DB commit — at-least-once) therefore cannot
+     *     double-write / double-bill. The unique index on the key is the hard backstop if two processes ever race
+     *     past this.</li>
+     * </ol>
+     * Which column is the key and which tables are read is the edge's ({@link IdempotencyKey}).
+     */
+    private List<cdr> DropWhatMustNotBeBilledAgain(Connection conn, List<cdr> cdrs, boolean legacyDedup,
+            String batchLock) throws SQLException {
+        List<cdr> afterLegacy = legacyDedup ? FilterLegacyOwned(cdrs, seqs -> jdbcOwnedSeqs(conn, seqs)) : cdrs;
+        if (afterLegacy.size() < cdrs.size())
+            log.infof("cutover legacy-dedup: skipped %d cdr(s) owned by legacy (seq in cdr/cdrerror) in %s",
+                    cdrs.size() - afterLegacy.size(), batchLock);
+
+        IdempotencyKey key = _edge.Key();
+        for (cdr c : afterLegacy) key.StampOn(c);
+        List<cdr> firstCopies = DropLaterCopiesInTheBatch(afterLegacy, key);
+        if (firstCopies.size() < afterLegacy.size())
+            log.infof("idempotency: dropped %d later cop(ies) of a record inside one batch in %s",
+                    afterLegacy.size() - firstCopies.size(), batchLock);
+
+        List<cdr> toProcess = DropWhatIsAlreadyWritten(conn, firstCopies, key);
+        if (toProcess.size() < firstCopies.size())
+            log.infof("idempotency: skipped %d already-written cdr(s) in %s (redelivery)",
+                    firstCopies.size() - toProcess.size(), batchLock);
+        return toProcess;
+    }
+
+    /** PURE: keep the FIRST record of each key, in order; a record with no key cannot be told from another and is
+     * always kept. */
+    static List<cdr> DropLaterCopiesInTheBatch(List<cdr> cdrs, IdempotencyKey key) {
+        Set<String> seen = new HashSet<>();
+        List<cdr> firstCopies = new ArrayList<>(cdrs.size());
+        for (cdr c : cdrs) {
+            String k = key.Of(c);
+            if (IdempotencyKey.IsBlank(k) || seen.add(k)) firstCopies.add(c);
+        }
+        return firstCopies.size() == cdrs.size() ? cdrs : firstCopies;
+    }
+
+    /**
+     * Cross-batch dedup: return the cdrs whose key is NOT already present in this schema, in any of the key's tables
+     * (already-written rows are dropped). Called under the tenant batch lock, so the read is race-free against
+     * other batches on the same schema. Cdrs with a null/empty key are always kept — they cannot be deduped, so
+     * the producer must supply the key for at-least-once safety.
+     */
+    private static List<cdr> DropWhatIsAlreadyWritten(Connection conn, List<cdr> cdrs, IdempotencyKey key) {
+        var candidates = new LinkedHashSet<String>();
+        for (var c : cdrs)
+            if (!IdempotencyKey.IsBlank(key.Of(c))) candidates.add(key.Of(c));
+        if (candidates.isEmpty()) return cdrs;
+
+        var already = new HashSet<String>();
+        for (String table : key.Tables()) SelectExistingKeys(conn, table, key.Column(), candidates, already);
+        if (already.isEmpty()) return cdrs;
+
+        var kept = new ArrayList<cdr>(cdrs.size());
+        for (var c : cdrs)
+            if (IdempotencyKey.IsBlank(key.Of(c)) || !already.contains(key.Of(c))) kept.add(c);
+        return kept;
+    }
+
+    /** Batched {@code SELECT <key> FROM <table> WHERE <key> IN (…)} (chunked), index-served. Table and column are
+     * internal literals of the {@link IdempotencyKey}, never external input. */
+    private static void SelectExistingKeys(Connection conn, String table, String column, Set<String> keys, Set<String> into) {
+        var ids = new ArrayList<>(keys);
+        final int chunk = 500;   // batches are small; keep the IN-list bounded
+        for (int i = 0; i < ids.size(); i += chunk) {
+            var slice = ids.subList(i, Math.min(i + chunk, ids.size()));
+            var sql = new StringBuilder("select ").append(column).append(" from ").append(table)
+                    .append(" where ").append(column).append(" in (");
+            for (int j = 0; j < slice.size(); j++) sql.append(j == 0 ? "?" : ",?");
+            sql.append(")");
+            try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+                for (int j = 0; j < slice.size(); j++) ps.setString(j + 1, slice.get(j));
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) into.add(rs.getString(1));
+                }
+            } catch (SQLException e) {
+                throw new RuntimeException("idempotency dedup query failed", e);
             }
         }
     }
@@ -245,94 +349,6 @@ public final class MySqlCdrBatchRunner {
             try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
                 for (int j = 0; j < slice.size(); j++) ps.setLong(j + 1, slice.get(j));
                 ps.executeUpdate();
-            }
-        }
-    }
-
-    private static String TenantBatchLockName(Connection conn) {
-        String schema;
-        try {
-            schema = conn.getCatalog();
-        } catch (SQLException e) {
-            schema = null;
-        }
-        return "billing_batch_" + (schema != null && !schema.isEmpty() ? schema : "default");
-    }
-
-    /** GET_LOCK is session-scoped (not transaction-scoped), so it stays held across the commit. */
-    private static void AcquireLock(Connection conn, String name) {
-        try (var stmt = conn.prepareStatement("select get_lock(?, 30)")) {
-            stmt.setString(1, name);
-            try (var rs = stmt.executeQuery()) {
-                if (rs.next() && rs.getInt(1) == 1) return;
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("acquiring tenant batch lock " + name + " failed", e);
-        }
-        throw new RuntimeException("tenant batch lock " + name + " not acquired within 30s (another batch still running?)");
-    }
-
-    private static void ReleaseLock(Connection conn, String name) {
-        try (var stmt = conn.prepareStatement("select release_lock(?)")) {
-            stmt.setString(1, name);
-            stmt.executeQuery();
-        } catch (SQLException ignored) {
-            // best-effort: closing the session releases the lock anyway.
-        }
-    }
-
-    /** PURE: keep the FIRST record of each key, in order; a record with no key cannot be told from another and is
-     * always kept. */
-    static List<cdr> DropLaterCopiesInTheBatch(List<cdr> cdrs, IdempotencyKey key) {
-        Set<String> seen = new HashSet<>();
-        List<cdr> firstCopies = new ArrayList<>(cdrs.size());
-        for (cdr c : cdrs) {
-            String k = key.Of(c);
-            if (IdempotencyKey.IsBlank(k) || seen.add(k)) firstCopies.add(c);
-        }
-        return firstCopies.size() == cdrs.size() ? cdrs : firstCopies;
-    }
-
-    /**
-     * Cross-batch dedup: return the cdrs whose key is NOT already present in this schema, in any of the key's tables
-     * (already-written rows are dropped). Called under the tenant batch lock, so the read is race-free against
-     * other batches on the same schema. Cdrs with a null/empty key are always kept — they cannot be deduped, so
-     * the producer must supply the key for at-least-once safety.
-     */
-    private static List<cdr> DropWhatIsAlreadyWritten(Connection conn, List<cdr> cdrs, IdempotencyKey key) {
-        var candidates = new LinkedHashSet<String>();
-        for (var c : cdrs)
-            if (!IdempotencyKey.IsBlank(key.Of(c))) candidates.add(key.Of(c));
-        if (candidates.isEmpty()) return cdrs;
-
-        var already = new HashSet<String>();
-        for (String table : key.Tables()) SelectExistingKeys(conn, table, key.Column(), candidates, already);
-        if (already.isEmpty()) return cdrs;
-
-        var kept = new ArrayList<cdr>(cdrs.size());
-        for (var c : cdrs)
-            if (IdempotencyKey.IsBlank(key.Of(c)) || !already.contains(key.Of(c))) kept.add(c);
-        return kept;
-    }
-
-    /** Batched {@code SELECT <key> FROM <table> WHERE <key> IN (…)} (chunked), index-served. Table and column are
-     * internal literals of the {@link IdempotencyKey}, never external input. */
-    private static void SelectExistingKeys(Connection conn, String table, String column, Set<String> keys, Set<String> into) {
-        var ids = new ArrayList<>(keys);
-        final int chunk = 500;   // batches are small; keep the IN-list bounded
-        for (int i = 0; i < ids.size(); i += chunk) {
-            var slice = ids.subList(i, Math.min(i + chunk, ids.size()));
-            var sql = new StringBuilder("select ").append(column).append(" from ").append(table)
-                    .append(" where ").append(column).append(" in (");
-            for (int j = 0; j < slice.size(); j++) sql.append(j == 0 ? "?" : ",?");
-            sql.append(")");
-            try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
-                for (int j = 0; j < slice.size(); j++) ps.setString(j + 1, slice.get(j));
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) into.add(rs.getString(1));
-                }
-            } catch (SQLException e) {
-                throw new RuntimeException("idempotency dedup query failed", e);
             }
         }
     }

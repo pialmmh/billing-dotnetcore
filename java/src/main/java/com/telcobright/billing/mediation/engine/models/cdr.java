@@ -117,11 +117,12 @@ public class cdr implements ICacheble<cdr> {
     public Long ChangedByJobId;
     public LocalDateTime SignalingStartTime = LocalDateTime.of(1, 1, 1, 0, 0);
 
-    // --- NEW columns carried by the Kafka `cdr_rated` ingest (cdr-kafka-ingest-contract §2) ---
+    // --- The ratified wire's own fields (cdr-kafka-ingest-contract §2; routesphere ad-is-a-call §4.1) ---
     // These EXTEND the legacy engine model ("extend, don't replace"); they are NOT part of the legacy
-    // 104-col ExtInsertColumns order below. They are populated by CdrEventPreprocessor. The write-layer
-    // wiring (append to ExtInsertColumns/GetExtInsertValues + DDL) is a SEPARATE staged change — until then
-    // these are in-memory only (mapped + carried through the pipeline, not yet persisted to their own columns).
+    // 104-col ExtInsertColumns order below. They are populated by CdrEventPreprocessor and travel in the summary
+    // outbox blob. On PostgreSQL they are WRITTEN, to their own columns (CdrRowSql.WireColumns; the table
+    // billing-core makes there has them). On MySQL they stay in memory: the MySQL cdr tables have no such
+    // columns until a DDL in the owner's window adds them.
     public String ResellerHierarchy;
     public String ChannelCallUuid;
     public String HangupCause;

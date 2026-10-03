@@ -16,7 +16,7 @@ import java.sql.SQLException;
  * its driver, so no explicit {@code Class.forName} is needed. The C# connection string set only
  * Server/Port/Database/User/Password (no extra options), so the JDBC URL carries no query parameters.</p>
  */
-public final class MySqlConnectionFactory {
+public final class MySqlConnectionFactory implements ITenantConnectionFactory {
     private final String _host;
     private final int _port;
     private final String _user;
@@ -30,11 +30,18 @@ public final class MySqlConnectionFactory {
     }
 
     /** True once a host + username are present (so the batch RPC can refuse cleanly otherwise). */
+    @Override
     public boolean IsConfigured() {
         return !(_host == null || _host.isBlank()) && !(_user == null || _user.isBlank());
     }
 
+    @Override
+    public com.telcobright.billing.mediation.sql.SqlDialect Dialect() {
+        return com.telcobright.billing.mediation.sql.SqlDialect.MySql;
+    }
+
     /** Open a connection to the given schema (the tenant dbName) on the datasource. */
+    @Override
     public Connection Open(String database) {
         // allowMultiQueries=true: the summary roll-up flushes a segment of N ';'-separated UPDATE/DELETE
         // statements through one Statement.executeUpdate (BatchSqlWriter.WriteStatementsInSegments). MySQL

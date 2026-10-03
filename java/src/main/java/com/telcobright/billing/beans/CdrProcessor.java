@@ -2,7 +2,7 @@ package com.telcobright.billing.beans;
 
 import com.telcobright.billing.data.CdrRowMapper;
 import com.telcobright.billing.data.MySqlCdrBatchRunner;
-import com.telcobright.billing.data.MySqlConnectionFactory;
+import com.telcobright.billing.data.ITenantConnectionFactory;
 import com.telcobright.billing.ingest.CdrKafkaConsumer;
 import com.telcobright.billing.ingest.IngestHealth;
 import com.telcobright.billing.mediation.cdr.CdrBatchResult;
@@ -37,7 +37,7 @@ public class CdrProcessor {
     private static final Logger log = Logger.getLogger(CdrProcessor.class);
 
     private final ITenantRegistry tenants;            // config-manager view, kept in sync underneath
-    private final MySqlConnectionFactory connections;
+    private final ITenantConnectionFactory connections;
     private final MySqlCdrBatchRunner batchRunner;
     private final SummaryOutboxOptions summary;
     private final SummaryChangeNotificationPublisher summaryPublisher;
@@ -48,7 +48,7 @@ public class CdrProcessor {
     private CdrKafkaConsumer cdrConsumer;             // started on onStart when cdr ingest is enabled
 
     @Inject
-    public CdrProcessor(ITenantRegistry tenants, MySqlConnectionFactory connections,
+    public CdrProcessor(ITenantRegistry tenants, ITenantConnectionFactory connections,
             MySqlCdrBatchRunner batchRunner, SummaryOutboxOptions summary,
             SummaryChangeNotificationPublisher summaryPublisher, CdrIngestOptions cdrIngest,
             MediationOptions mediation, IngestHealth ingestHealth) {
@@ -146,13 +146,13 @@ public class CdrProcessor {
             StringBuilder where = new StringBuilder("FileName='kafka:cdr'");
             if (onlySuccessful) where.append(" and ChargingStatus=1 and DurationSec>0");
             if (errorCode != null && !errorCode.isEmpty()) where.append(" and ErrorCode=?");
-            String sql = "select " + CdrRowMapper.SelectColumns() + " from cdrerror where " + where
+            String sql = "select " + CdrRowMapper.SelectColumns(connections.Dialect()) + " from cdrerror where " + where
                     + " order by StartTime limit " + Math.max(0, limit);
             try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
                 if (errorCode != null && !errorCode.isEmpty()) ps.setString(1, errorCode);
                 try (java.sql.ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        cdr c = CdrRowMapper.FromResultSet(rs);
+                        cdr c = CdrRowMapper.FromResultSet(rs, connections.Dialect());
                         cdrs.add(c);
                         if (c.IdCall > 0) idCalls.add(c.IdCall);
                     }

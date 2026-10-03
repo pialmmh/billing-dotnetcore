@@ -1,7 +1,11 @@
 package com.telcobright.billing;
 
+import com.telcobright.billing.data.ITenantConnectionFactory;
 import com.telcobright.billing.data.MySqlCdrBatchRunner;
 import com.telcobright.billing.data.MySqlConnectionFactory;
+import com.telcobright.billing.data.PostgresConnectionFactory;
+import com.telcobright.billing.data.PostgresEdge;
+import com.telcobright.billing.data.PostgresTenantTables;
 import com.telcobright.billing.data.MySqlSummaryBatchRunner;
 import com.telcobright.billing.mediation.rating.BasicCharge;
 import com.telcobright.billing.mediation.rating.FinalizeEngine;
@@ -134,16 +138,24 @@ public class BillingConfig {
     }
 
     // --- Datasource (the post-call / batch write slice) -------------------------------------------
+    // The write target is the profile's (billing.datasource.kind): MySQL — a tenant is a database — or PostgreSQL —
+    // a tenant is a schema of the one switch database. The pipeline and the transaction are the same; the connection
+    // factory and the runner's edge are the two things that differ.
     @Produces
     @Singleton
-    public MySqlConnectionFactory connectionFactory(DatasourceOptions ds) {
-        return new MySqlConnectionFactory(ds.Host, ds.Port, ds.Username, ds.Password);
+    public ITenantConnectionFactory connectionFactory(DatasourceOptions ds) {
+        return ds.IsPostgres()
+                ? new PostgresConnectionFactory(ds.Host, ds.Port, ds.Database, ds.Username, ds.Password)
+                : new MySqlConnectionFactory(ds.Host, ds.Port, ds.Username, ds.Password);
     }
 
     @Produces
     @Singleton
-    public MySqlCdrBatchRunner cdrBatchRunner() {
-        return MySqlCdrBatchRunner.Default();
+    public MySqlCdrBatchRunner cdrBatchRunner(DatasourceOptions ds) {
+        if (!ds.IsPostgres()) return MySqlCdrBatchRunner.Default();
+        var tables = new PostgresTenantTables(new PostgresTenantTables.Options(
+                ds.PostgresSummaryServiceRole, ds.PostgresReaderRoles, ds.PostgresMonthsBack, ds.PostgresMonthsAhead));
+        return MySqlCdrBatchRunner.On(new PostgresEdge(tables));
     }
 
     @Produces
