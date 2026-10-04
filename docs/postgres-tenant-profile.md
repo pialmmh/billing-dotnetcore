@@ -53,7 +53,7 @@ billing:
   summary:
     enabled: true                                      # the ping; the outbox row is written regardless
     entity-type: "cdr"
-    ping-topic: "cdr_summary_ping"
+    ping-topic: "cdr_summary_ping_btcl"                # named by the ROOT, as the cdr topic is (see 2)
     bootstrap-servers: "10.10.199.20:9092"
 
   summary-rollup:
@@ -80,11 +80,25 @@ billing:
 |---|---|
 | the switch database, the roles `billing_core`, `summary_service`, `ad_sphere`, and `GRANT billing_core, summary_service TO prime_context` | the deployment's window (prime-context `docs/ad-as-call/postgres-tenancy.md` §3) |
 | each tenant's schema, with USAGE + CREATE for `billing_core` | prime-context's provisioning |
-| the Kafka topics `cdr_<root>`, `cdr_dlq_<root>`, `config_event_loader_<root>`, `cdr_summary_ping` | the deployment's window. billing-core creates no topic |
+| the Kafka topics `cdr_<root>`, `cdr_dlq_<root>`, `config_event_loader_<root>`, `cdr_summary_ping_<root>` | the deployment's window. billing-core creates no topic |
 | the variable named by `password-ref`, in the unit's environment | secreteer (`/etc/secreteer/<tenant>/<app>.env`, `EnvironmentFile=`) |
 
 billing-core's own tables — `cdr`, `cdrerror`, `acc_chargeable`, `summary_affected` — are **not** on this list: it makes them itself
 the first time it serves a schema (`java/src/main/resources/sql/postgres/billing-tables.sql`). Nobody applies that file by hand.
+
+**The four topics are not alike.**
+
+| topic | when it is missing |
+|---|---|
+| `cdr_dlq_<root>` (`billing.cdr-ingest.dead-letter-topic`) | the ingest consumes NOTHING and `/q/health` is DOWN, until the topic is there. A refused record must never be lost behind a committed offset |
+| `cdr_summary_ping_<root>` (`billing.summary.ping-topic`) | **nothing waits.** The rows are in `cdr` at once; billing-core says ONE WARN a minute (`summary ping NOT published to topic '…' on … — the topic is not on the brokers`) and `/q/health` stays UP, with the detail `summary-ping`. The summaries then come at the summary service's next poll instead of at once. When the topic is made the pings start by themselves within a minute: no restart |
+
+**The ping's topic is named by the root**, `cdr_summary_ping_<root>`, as the cdr topic is — a profile value on BOTH sides: here
+`billing.summary.ping-topic`, and the same name in the summary service's profile. Two roots on one set of brokers must not ring each
+other's summary service. The built-in default, `cdr_summary_ping`, is what a profile gets that names none (`ccl78` names it so).
+
+billing-core creates no topic, and the ping does not make a broker create one either: the brokers are asked for their topics, and a
+topic they do not list is never handed a ping — also where the brokers would create a topic on first use (`auto.create.topics.enable`).
 
 ## 3 · What to look at
 
@@ -92,5 +106,7 @@ the first time it serves a schema (`java/src/main/resources/sql/postgres/billing
 |---|---|
 | `GET /q/health` (the service's HTTP port) | `cdr-ingest` is DOWN, with the reason, while the ingest is refused at start (no dead-letter topic) or holds a batch whose dead letters cannot be published |
 | the log, `cdr ingest REFUSED — …` | the same refusal, in words, with the topic and the brokers |
+| `GET /q/health`, `cdr-ingest` UP with the detail `summary-ping` | the summary ping cannot be published (its topic is not on the brokers, or they do not answer). Nothing waits: the rows are written, the summary service polls |
+| the log, `summary ping NOT published to topic '…' on … — …` (WARN, once a minute) | the same, with the topic, the brokers, the cause and how many pings were not sent. `summary ping: topic '…' on … takes pings again` when it is over |
 | the log, `schema <s>: billing-core's tables made — …` | the first batch of a schema made its tables |
 | the log, `schema <s>: partition <p> could NOT be added (…)` | a month could not be added; its rows go to the DEFAULT partition; tried again the next day |

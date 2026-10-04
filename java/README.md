@@ -16,6 +16,10 @@
 > **2 · A health road is new:** `GET /q/health` on the service's HTTP port (`quarkus-smallrye-health`). Its `cdr-ingest` check is
 > DOWN, with the reason, while the ingest is refused or holds a batch. A window's gate and a monitor read it.
 >
+> The summary PING is different: its topic (`billing.summary.ping-topic`; `cdr_summary_ping_<root>` on a deployment) holds nothing
+> when it is missing. The rows are written at once, billing-core says ONE WARN a minute that names the topic and the brokers, and the
+> same check stays UP with the detail `summary-ping`. The summaries then come at the summary service's poll.
+>
 > **3 · A new consumer group starts at `earliest`** (`billing.cdr-ingest.auto-offset-reset`). A group that already has offsets is not
 > affected; `ccl78` dev keeps `latest` in its profile.
 >
