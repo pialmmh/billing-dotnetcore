@@ -4,9 +4,10 @@ start unless each one is on THIS box.
 
     lab-endpoints.py <quarkus-app dir> <run dir> [key=value ...]
 
-Why: a jar carries build-time defaults, and this repo's jar carries the registry and the profiles of real
-deployments. A lab start that does not find its own configuration falls back to them and dials a real box. So a lab
-service is started only through start-local-only.sh, which runs this first.
+Why: a jar carries build-time defaults, and this repo's jar carries the profiles of real deployments (its own
+registry enables no tenant; a registry that names one of them without its own profile file reads the jar's). A lab
+start that falls back to them dials a real box. So a lab service is started only through start-local-only.sh, which
+runs this first.
 
 What is read, in the order the service itself applies them (the later wins):
     1. the application.properties inside the jar            (<quarkus-app dir>/app/*.jar)
@@ -133,8 +134,8 @@ def effective_properties(app_dir, run_dir, set_on_the_command_line):
     configuration of its own or the jar's build-time defaults cannot be read."""
     own = os.path.join(run_dir, 'config', 'application.properties')
     if not os.path.isfile(own):
-        print('REFUSED: %s does not exist. A start from here would run on what the jar itself carries — its build-time'
-              ' defaults and, in this repo, the registry of a real deployment.' % own)
+        print('REFUSED: %s does not exist. A start from here would run on what the jar itself carries: its build-time'
+              ' defaults (this repo\'s jar enables no tenant and would refuse to start).' % own)
         return None
     bundled = bundled_properties(app_dir)
     if bundled is None:

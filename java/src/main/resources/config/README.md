@@ -2,8 +2,11 @@
 
 Routesphere-style, split into two parts:
 
-**1. Tenant registry** — lives in `src/main/resources/application.properties` (NOT in this folder).
-It only says WHICH tenants this instance loads and the ACTIVE profile per tenant:
+**1. Tenant registry** — lives in the DEPLOYMENT's own `application.properties`: `config/application.properties` in
+the service's working directory (NOT in this folder, and NOT in the jar: the jar's own `application.properties`
+enables no tenant, and a start with none is refused — `REFUSING TO START: no tenant is enabled. …`).
+It only says WHICH tenants this instance loads and the ACTIVE profile per tenant (`ccl78`'s lines, as an example —
+`java/deploy/ccl78-application.properties.example`):
 
 ```properties
 billing.tenants[0].name=ccl78
@@ -40,14 +43,15 @@ are on). No real secrets are committed here.
 
 ## How it is consumed
 
-On start, `ProfileConfigReader.ReadSelection()` reads the registry from `application.properties`; then for
+On start, `ProfileConfigReader.ReadSelection()` reads the registry from the deployment's `application.properties`
+(a registry that enables nobody is refused); then for
 the active (first enabled) tenant it reads `config/tenants/<name>/<profile>/profile-<profile>.yml` from the
 classpath. `TenantConfigSync`/`BillingBootstrap` fetch each tenant root from config-manager over HTTP and
 build the in-memory `Tenant` tree where `tenant.Context` is a `DynamicContext` holding a `MediationContext`.
 A Kafka `config_event_loader_<tenant>` message triggers a debounced (3000 ms) re-fetch. See `TenantConfigSync/`.
 
 ## Add a tenant / profile
-- **New tenant:** append `billing.tenants[N].{name,enabled,profile}` in `application.properties` and drop a
+- **New tenant:** append `billing.tenants[N].{name,enabled,profile}` in the deployment's `config/application.properties` and drop a
   `config/tenants/<name>/<profile>/profile-<profile>.yml` here.
 - **New profile for a tenant:** add a `config/tenants/<name>/<profile>/` folder with its `profile-<profile>.yml`,
   and point that tenant's `billing.tenants[i].profile` at it.

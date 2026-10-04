@@ -23,11 +23,13 @@
 > **3 · A new consumer group starts at `earliest`** (`billing.cdr-ingest.auto-offset-reset`). A group that already has offsets is not
 > affected; `ccl78` dev keeps `latest` in its profile.
 >
-> **4 · A start says its endpoints first — and THE JAR, STARTED WITHOUT A CONFIGURATION OF ITS OWN, IS `ccl78` DEV.**
-> The `application.properties` inside the jar enables tenant `ccl78`, profile `dev`, and that profile names boxes that run today
-> (its config-manager, its Kafka, its MySQL) with the cdr ingest ON. `java -jar …/quarkus-run.jar` or `mvn quarkus:dev` from a
-> directory with no `config/application.properties` of its own is that deployment: it fetches its tree, joins its consumer group,
-> writes to its database. A lab start goes through `tools/lab/start-local-only.sh` only — see "A start in a lab" below.
+> **4 · A start says its endpoints first — and THE JAR ENABLES NO TENANT.** A start that finds no tenant registry is REFUSED
+> (`REFUSING TO START: no tenant is enabled. …`), in words that say how a deployment names one: three lines in the
+> `application.properties` of its OWN configuration directory — `config/application.properties` in the service's working directory.
+> **`ccl78`'s three lines are in `deploy/ccl78-application.properties.example`: they must be on its box BEFORE this build is
+> deployed there** (forgotten = the service does not start, and `deploy-ccl-prod.sh` rolls back by itself).
+> The jar still carries `ccl78`'s PROFILES, which name boxes that run today: a registry that names one of them dials them. A lab
+> start goes through `tools/lab/start-local-only.sh` only — see "A start in a lab" below.
 >
 > The profile of a PostgreSQL tenant: `../docs/postgres-tenant-profile.md`. The wire: `../docs/cdr-kafka-ingest-contract.md`.
 
@@ -68,8 +70,8 @@ mvn -f java/pom.xml test                 # tests only (the MySQL integration tes
 mvn -f java/pom.xml test -Dbc.lab.pg.url=jdbc:postgresql://127.0.0.1:7743/routesphere
                                          # + the PostgreSQL lab tests (a throwaway PostgreSQL with the roles of
                                          #   prime-context's postgres-tenancy.md §4); without the key they are SKIPPED
-mvn -f java/pom.xml quarkus:dev          # dev mode — AS ccl78 DEV: it dials that deployment's boxes (top of this page, 4)
-java -jar java/target/quarkus-app/quarkus-run.jar   # the same, unless the directory has its own config/application.properties
+mvn -f java/pom.xml quarkus:dev          # dev mode — REFUSED without a tenant registry of its own (top of this page, 4)
+java -jar java/target/quarkus-app/quarkus-run.jar   # the same: it needs config/application.properties in its directory, naming a tenant
 java/tools/lab/start-local-only.sh java/target/quarkus-app <run dir> [-e NAME]...   # a LAB start: this box only
 ```
 
@@ -105,8 +107,9 @@ A lab start is made with `tools/lab/start-local-only.sh <quarkus-app dir> <run d
 A host NAME is never looked up — the lookup itself would leave the box — and is refused. The launcher works for any Quarkus
 jar (a lab's prime-context is started with it too); step 3 is billing-core's own.
 - gRPC server: `:9000` (h2c, separate server).
-- Tenant config (routesphere convention): registry (enable/disable + active profile) in
-  `application.properties` (`billing.tenants[i].*`); per-profile YAML in
+- Tenant config (routesphere convention): the registry (enable/disable + active profile, `billing.tenants[i].*`) is the
+  DEPLOYMENT's — `config/application.properties` in the service's working directory. The jar's own `application.properties`
+  enables no tenant, and a start with none is refused. Per-profile YAML in
   `src/main/resources/config/tenants/<t>/<p>/profile-<p>.yml` (classpath), overridable by an external
   dir via `billing.config.dir`.
 - Local MySQL for integration tests: `127.0.0.1:3306` (lxc), user `root`. Its password is in no file of this

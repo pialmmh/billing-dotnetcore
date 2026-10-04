@@ -1,0 +1,19 @@
+# ccl78 — the TENANT REGISTRY of this deployment.
+#
+# The jar enables no tenant: a start that finds no registry is refused
+#   ("REFUSING TO START: no tenant is enabled. …").
+# These three lines are what the jar itself carried until now. Put them into
+#     <the service's working directory>/config/application.properties
+# on the box (Quarkus reads that file over the jar's own). For deploy-ccl-prod.sh the working directory
+# is the unit's WorkingDirectory — /opt/billing/app when the unit runs the jar from there — so the file is
+#     /opt/billing/app/config/application.properties
+# The deploy script replaces app/, lib/, quarkus/ and quarkus-run.jar only: a config/ directory stays.
+#
+# Do it BEFORE the first build that enables no tenant is deployed. If it is forgotten the service does
+# not start, and deploy-ccl-prod.sh rolls back to the previous build by itself (its health check).
+#
+# If the box already has a config/application.properties with billing.tenants[...] lines of its own,
+# it needs nothing: this file changes nothing for it.
+billing.tenants[0].name=ccl78
+billing.tenants[0].enabled=true
+billing.tenants[0].profile=dev

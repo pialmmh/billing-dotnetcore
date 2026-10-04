@@ -5,8 +5,8 @@
 #
 # 1. BEFORE anything is started, lab-endpoints.py says every address the run directory's configuration names (over
 #    the jar's own build-time defaults) and refuses unless each one is on this box. A run directory without its own
-#    config/application.properties is refused: a start from there would run on what the jar carries, and this
-#    repo's jar carries the registry and the profiles of a real deployment.
+#    config/application.properties is refused: a start from there would run on what the jar carries (this repo's
+#    jar enables no tenant and refuses such a start itself; it still carries the profiles of a real deployment).
 # 2. The service is started IN the run directory with an emptied environment — PATH, HOME, LANG, JAVA_HOME and the
 #    variables named with -e stay (a secret is NAMED here, its value comes from the caller's environment and is on
 #    no command line) — so that no variable of the caller's shell moves an address.

@@ -22,7 +22,9 @@ import java.util.Optional;
  *
  * <p><b>Tenant registry</b> (which tenants this instance loads + the active profile per tenant) comes from
  * {@code application.properties} — {@code billing.tenants[i].name|enabled|profile} — mirroring routesphere,
- * where {@code application.properties} only enables/disables a tenant and picks its active profile.
+ * where {@code application.properties} only enables/disables a tenant and picks its active profile. The registry is
+ * the DEPLOYMENT's ({@code config/application.properties} in its working directory): the jar's own enables no
+ * tenant, and a start with none enabled is refused ({@link #RefuseARegistryThatEnablesNobody}).
  *
  * <p><b>Per-tenant/per-profile detail</b> lives in {@code config/tenants/<tenant>/<profile>/profile-<profile>.yml}
  * under {@code src/main/resources} (routesphere Tree 1) and is read from the classpath. An external directory
@@ -67,6 +69,25 @@ public final class ProfileConfigReader {
         }
         TenantSelection selection = new TenantSelection();
         selection.Tenants = rows;
+        return selection;
+    }
+
+    /** What a start with no tenant enabled is told. */
+    public static final String NoTenantIsEnabled = "REFUSING TO START: no tenant is enabled. The jar itself enables none."
+        + " A deployment names its tenant in the application.properties of its OWN configuration directory —"
+        + " config/application.properties in the service's working directory, which is read over the jar's — with three"
+        + " lines: billing.tenants[0].name=<tenant>, billing.tenants[0].enabled=true, billing.tenants[0].profile=<profile>"
+        + " (and billing.config.dir=<directory> when its profile files are its own too). ccl78's three lines are in"
+        + " java/deploy/ccl78-application.properties.example.";
+
+    /**
+     * The registry of a start, or a refusal: a registry that enables nobody starts nothing useful — and the jar's own
+     * enables nobody, so that a start without a configuration of its own is no deployment's.
+     */
+    public static TenantSelection RefuseARegistryThatEnablesNobody(TenantSelection selection) {
+        if (selection.Enabled().isEmpty()) {
+            throw new IllegalStateException(NoTenantIsEnabled);
+        }
         return selection;
     }
 

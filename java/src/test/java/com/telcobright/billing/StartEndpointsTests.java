@@ -147,7 +147,7 @@ class StartEndpointsTests {
 
     @Test
     void a_lab_start_that_fell_back_to_a_profile_the_jar_carries_is_refused_and_every_endpoint_is_named() throws Exception {
-        // The jar's own registry enables ccl78 / dev: what a start gets when its run directory's configuration is not found.
+        // A registry that names ccl78 / dev without that deployment's own profile file reads the profile THE JAR carries.
         StartEndpoints fellBack = EndpointsOf(TheJarsOwnProfile("ccl78", "dev"));
 
         IllegalStateException refused = assertThrows(IllegalStateException.class, fellBack::RefuseWhatIsNotThisBox);
@@ -220,8 +220,8 @@ class StartEndpointsTests {
     }
 
     @Test
-    void the_composition_root_refuses_a_lab_start_that_reads_the_jars_own_registry_and_profile() {
-        TenantSelection theJarsOwnRegistry = new TenantSelection();
+    void the_composition_root_refuses_a_lab_start_whose_registry_names_a_profile_the_jar_carries() {
+        TenantSelection theJarsOwnRegistry = new TenantSelection();          // … as the jar's own registry was, once
         theJarsOwnRegistry.Tenants = List.of(new SelectedTenant("ccl78", true, "dev"));
         System.setProperty(StartEndpoints.LocalOnlyKey, "true");          // what the lab launcher passes as -D
         try {

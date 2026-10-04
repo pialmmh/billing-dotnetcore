@@ -45,8 +45,8 @@ import java.net.http.HttpClient;
  * <p>The datasource's password comes from the unit's ENVIRONMENT where the profile names a variable
  * ({@code password-ref: env:<VAR>} — the wifi bed, the secreteer rule), else from the profile YAML inline (the
  * deployments that keep it there). The tenant registry (enable/disable + active profile) is read from
- * application.properties (routesphere convention); the per-profile YAML detail from the classpath
- * config tree under src/main/resources/config.
+ * application.properties (routesphere convention) — the DEPLOYMENT's own: the jar's enables no tenant, and a start
+ * with none is refused; the per-profile YAML detail from the classpath config tree under src/main/resources/config.
  */
 @ApplicationScoped
 public class BillingConfig {
@@ -55,7 +55,8 @@ public class BillingConfig {
     @Produces
     @Singleton
     public TenantSelection tenantSelection() {
-        return ProfileConfigReader.ReadSelection();
+        // the jar enables no tenant: a start without a registry of its own is refused here, in words
+        return ProfileConfigReader.RefuseARegistryThatEnablesNobody(ProfileConfigReader.ReadSelection());
     }
 
     // The four blocks of the profile that hold an ADDRESS are read here, once: said in the log before anything is

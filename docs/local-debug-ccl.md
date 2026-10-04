@@ -90,12 +90,16 @@ mvn -f java/pom.xml clean package            # expect: BUILD SUCCESS, 89 tests p
 ## 2. Config — routesphere style; already points at CCL, just fill the DB creds
 Two parts (see `java/src/main/resources/config/README.md`):
 
-1. **Tenant registry** — `java/src/main/resources/application.properties` (which tenants load + active profile):
+1. **Tenant registry** (which tenants load + active profile) — NOT in the jar any more: the jar enables no tenant and a
+   start without a registry is refused. Give the run its own: these three lines (`java/deploy/ccl78-application.properties.example`)
+   in a `config/application.properties` in the directory the service is started from, or any file named with
+   `-Dquarkus.config.locations=<file>`:
    ```properties
    billing.tenants[0].name=ccl78
    billing.tenants[0].enabled=true
    billing.tenants[0].profile=dev
    ```
+   **With these lines the run IS `ccl78` dev: it dials that deployment's config-manager, Kafka and MySQL (below).**
 2. **Active profile detail** — `java/src/main/resources/config/tenants/ccl78/dev/profile-dev.yml`, already CCL:
    - `config-manager.base-url: http://103.95.96.78:7072`
    - `config-events.bootstrap-servers: 103.95.96.78:9092`

@@ -18,9 +18,10 @@ import java.util.function.Predicate;
 /**
  * The addresses this process is about to dial — SAID before the first of them is dialed and, on a lab start, CHECKED.
  *
- * <p><b>Why.</b> The jar carries the tenant registry and the profiles of real deployments ({@code ccl78}). A start
- * that does not find the configuration it was meant to run with falls back to them: it would fetch a tree from, read
- * a topic of and write into a database of a box that runs today. So:
+ * <p><b>Why.</b> The jar carries the profiles of real deployments ({@code ccl78}). Its own registry enables no
+ * tenant — a start without a configuration of its own is refused — but a registry that names such a tenant without
+ * that tenant's own profile file reads the jar's: it would fetch a tree from, read a topic of and write into a
+ * database of a box that runs today. So:
  * <ul>
  *   <li><b>every start</b> logs, before anything else, where the active profile was read from and one line per
  *       endpoint — what it is, the address, the profile key that named it;</li>
