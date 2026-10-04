@@ -10,11 +10,11 @@ import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.model.AssignmentDirection;
 import com.telcobright.billing.mediation.model.Partner;
+import com.telcobright.billing.testsupport.MySqlLab;
 import com.telcobright.billing.testsupport.TestData;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -43,14 +43,13 @@ import org.junit.jupiter.api.Test;
 class CdrBatchAtomicityTests {
     private static final String ServerUrl = "jdbc:mysql://127.0.0.1:3306/";
     private static final String User = "root";
-    private static final String Password = "123456";
     private static final String Db = "billing_atomicity_test";
 
     private Connection conn;
 
     private static Connection tryOpen() {
         try {
-            return DriverManager.getConnection(ServerUrl, User, Password);
+            return MySqlLab.OpenOrNull(ServerUrl, User);
         } catch (Exception e) {
             return null;
         }
@@ -59,7 +58,7 @@ class CdrBatchAtomicityTests {
     @BeforeEach
     void setUp() {
         conn = tryOpen();
-        assumeTrue(conn != null, "local MySQL not reachable — skipping");
+        assumeTrue(conn != null, MySqlLab.WhySkipped());
     }
 
     @AfterEach

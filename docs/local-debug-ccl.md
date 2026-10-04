@@ -27,13 +27,15 @@ So the local-MySQL path still exercises real rating; only the writes land locall
 
 1. **Create the schema** (permissive throwaway DB — proves the writes, types not enforced):
    ```bash
-   mysql -h 127.0.0.1 -P 3306 -u root -p123456 -e 'create database if not exists ccl_debug'
-   mysql -h 127.0.0.1 -P 3306 -u root -p123456 ccl_debug < docs/local-debug-schema.sql
+   mysql -h 127.0.0.1 -P 3306 -u root -p -e 'create database if not exists ccl_debug'
+   mysql -h 127.0.0.1 -P 3306 -u root -p ccl_debug < docs/local-debug-schema.sql
    ```
    (`docs/local-debug-schema.sql` creates `cdr`, `cdrerror`, `acc_chargeable`, `summary_affected` — the last
    with the real `id AUTO_INCREMENT` + `op` column.)
 2. **Point the profile at it** — in `java/src/main/resources/config/tenants/ccl78/dev/profile-dev.yml`,
-   `billing.datasource`: `host: 127.0.0.1`, `database: ccl_debug`, `username: root`, `password: 123456`.
+   `billing.datasource`: `host: 127.0.0.1`, `database: ccl_debug`, `username: root`, `password-ref: "env:BC_LAB_MYSQL_PASSWORD"` (the password stays in your
+   shell's environment — `read -rs BC_LAB_MYSQL_PASSWORD && export BC_LAB_MYSQL_PASSWORD` — and is in no file;
+   `-p` above asks for it).
    (`config-manager.base-url` and the `summary` block stay on CCL — leave them.)
 3. **Run + drive** (§3–§5 below), then inspect: `SELECT id, entity_type, op FROM ccl_debug.summary_affected;`
    → base64-decode → gunzip → JSON to see `[{Cdr, Chargeables:[...]}]`.

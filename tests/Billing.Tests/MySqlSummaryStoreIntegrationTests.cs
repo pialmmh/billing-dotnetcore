@@ -9,7 +9,7 @@ using MySqlConnector;
 namespace Billing.Tests;
 
 /// <summary>
-/// INTEGRATION TEST against the local lxc MySQL (127.0.0.1:3306, root/123456). Round-trips the summary
+/// INTEGRATION TEST against the local lxc MySQL (127.0.0.1:3306, root; the password from BC_LAB_MYSQL_PASSWORD). Round-trips the summary
 /// GENERATION, LOADING (PopulatePrevSummary reads existing rows from the DB) and INCREMENT/APPEND
 /// (merge-add onto the loaded row -> UPDATE) through the real <see cref="MySqlSummaryStore"/>. The test
 /// creates its own throwaway schema; it skips (passes as a no-op) if the DB is unreachable so the suite
@@ -17,11 +17,15 @@ namespace Billing.Tests;
 /// </summary>
 public class MySqlSummaryStoreIntegrationTests
 {
-    private const string ServerConn = "Server=127.0.0.1;Port=3306;User ID=root;Password=123456;";
+    // The lab MySQL's password is in no source: it is read from the environment variable
+    // BC_LAB_MYSQL_PASSWORD. Without it these tests return early (their skip), as when no MySQL answers.
+    private static readonly string? LabPassword = System.Environment.GetEnvironmentVariable("BC_LAB_MYSQL_PASSWORD");
+    private static readonly string ServerConn = $"Server=127.0.0.1;Port=3306;User ID=root;Password={LabPassword};";
     private const string Db = "billing_summary_test";
 
     private static MySqlConnection? TryOpen()
     {
+        if (string.IsNullOrEmpty(LabPassword)) return null;
         try { var c = new MySqlConnection(ServerConn); c.Open(); return c; }
         catch { return null; }
     }

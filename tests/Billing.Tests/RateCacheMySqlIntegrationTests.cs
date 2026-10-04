@@ -14,11 +14,15 @@ namespace Billing.Tests;
 /// up through it. A future-dated rate proves only the day-valid rates are loaded. Skips if mysql is down.</summary>
 public class RateCacheMySqlIntegrationTests
 {
-    private const string ServerConn = "Server=127.0.0.1;Port=3306;User ID=root;Password=123456;";
+    // The lab MySQL's password is in no source: it is read from the environment variable
+    // BC_LAB_MYSQL_PASSWORD. Without it these tests return early (their skip), as when no MySQL answers.
+    private static readonly string? LabPassword = System.Environment.GetEnvironmentVariable("BC_LAB_MYSQL_PASSWORD");
+    private static readonly string ServerConn = $"Server=127.0.0.1;Port=3306;User ID=root;Password={LabPassword};";
     private const string Db = "billing_rate_test";
 
     private static MySqlConnection? TryOpen()
     {
+        if (string.IsNullOrEmpty(LabPassword)) return null;
         try { var c = new MySqlConnection(ServerConn); c.Open(); return c; } catch { return null; }
     }
 

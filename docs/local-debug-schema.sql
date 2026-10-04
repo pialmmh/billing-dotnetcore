@@ -6,9 +6,10 @@
 -- Generated from cdr/acc_chargeable ExtInsertColumns (keep regenerated if they change).
 --
 -- Apply:
---   mysql -h 127.0.0.1 -P 3306 -u root -p123456 -e 'create database if not exists ccl_debug'
---   mysql -h 127.0.0.1 -P 3306 -u root -p123456 ccl_debug < docs/local-debug-schema.sql
--- then set profile-dev.yml datasource -> host 127.0.0.1, database ccl_debug, user root, password 123456.
+--   mysql -h 127.0.0.1 -P 3306 -u root -p -e 'create database if not exists ccl_debug'
+--   mysql -h 127.0.0.1 -P 3306 -u root -p ccl_debug < docs/local-debug-schema.sql
+-- then set profile-dev.yml datasource -> host 127.0.0.1, database ccl_debug, user root,
+-- password-ref "env:BC_LAB_MYSQL_PASSWORD" (the password is in no file; -p above asks for it).
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS cdr (

@@ -60,7 +60,7 @@ BillingBootstrap.java  startup: fail-fast tenant load + config-event listener
 ## Build / test / run
 ```bash
 mvn -f java/pom.xml clean package        # compile + 103 tests + runnable jar
-mvn -f java/pom.xml test                 # tests only (MySQL integration tests skip if 127.0.0.1:3306 down)
+mvn -f java/pom.xml test                 # tests only (the MySQL integration tests skip without BC_LAB_MYSQL_PASSWORD, or if 127.0.0.1:3306 is down)
 mvn -f java/pom.xml test -Dbc.lab.pg.url=jdbc:postgresql://127.0.0.1:7743/routesphere
                                          # + the PostgreSQL lab tests (a throwaway PostgreSQL with the roles of
                                          #   prime-context's postgres-tenancy.md §4); without the key they are SKIPPED
@@ -105,7 +105,9 @@ jar (a lab's prime-context is started with it too); step 3 is billing-core's own
   `application.properties` (`billing.tenants[i].*`); per-profile YAML in
   `src/main/resources/config/tenants/<t>/<p>/profile-<p>.yml` (classpath), overridable by an external
   dir via `billing.config.dir`.
-- Local MySQL for integration tests: `127.0.0.1:3306` (lxc), `root`/`123456`.
+- Local MySQL for integration tests: `127.0.0.1:3306` (lxc), user `root`. Its password is in no file of this
+  repository: the tests read it from the environment variable `BC_LAB_MYSQL_PASSWORD` and are SKIPPED without it
+  (`read -rs BC_LAB_MYSQL_PASSWORD && export BC_LAB_MYSQL_PASSWORD`, then `mvn -f java/pom.xml test`).
 
 ## Faithful-port notes (where C# semantics needed a Java shape)
 - Non-nullable C# value types default to a value, not null: `cdr` `DateTime` fields → `LocalDateTime.of(1,1,1,0,0)`

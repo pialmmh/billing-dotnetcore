@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -22,6 +21,7 @@ import org.junit.jupiter.api.Test;
 
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.sql.ISqlExecutor;
+import com.telcobright.billing.testsupport.MySqlLab;
 
 /**
  * The cdr row write: the ported ICacheble&lt;cdr&gt; insert (104 cols) — column/value arity parity (a
@@ -55,7 +55,6 @@ class CdrWriterTests {
     private static final String ServerUrl =
             "jdbc:mysql://127.0.0.1:3306/?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC";
     private static final String User = "root";
-    private static final String Password = "123456";
     private static final String Db = "billing_cdr_test";
 
     private static final class ConnExecutor implements ISqlExecutor {
@@ -68,7 +67,7 @@ class CdrWriterTests {
     }
 
     private static Connection TryOpen() {
-        try { return DriverManager.getConnection(ServerUrl, User, Password); } catch (Exception e) { return null; }
+        try { return MySqlLab.OpenOrNull(ServerUrl, User); } catch (Exception e) { return null; }
     }
 
     private static void Exec(Connection c, String sql) throws SQLException {
@@ -84,7 +83,7 @@ class CdrWriterTests {
     @Test
     void Writes_cdr_rows_to_mysql() throws Exception {
         Connection conn = TryOpen();
-        assumeTrue(conn != null, "local MySQL not reachable -> skipping");
+        assumeTrue(conn != null, MySqlLab.WhySkipped());
         try (conn) {
             Exec(conn, "create database if not exists " + Db);
             Exec(conn, "use " + Db);

@@ -33,7 +33,10 @@ public class CdrWriterTests
     }
 
     // ---- integration (skips if local mysql is unreachable) ----
-    private const string ServerConn = "Server=127.0.0.1;Port=3306;User ID=root;Password=123456;";
+    // The lab MySQL's password is in no source: it is read from the environment variable
+    // BC_LAB_MYSQL_PASSWORD. Without it these tests return early (their skip), as when no MySQL answers.
+    private static readonly string? LabPassword = System.Environment.GetEnvironmentVariable("BC_LAB_MYSQL_PASSWORD");
+    private static readonly string ServerConn = $"Server=127.0.0.1;Port=3306;User ID=root;Password={LabPassword};";
     private const string Db = "billing_cdr_test";
 
     private sealed class ConnExecutor : ISqlExecutor
@@ -45,6 +48,7 @@ public class CdrWriterTests
 
     private static MySqlConnection? TryOpen()
     {
+        if (string.IsNullOrEmpty(LabPassword)) return null;
         try { var c = new MySqlConnection(ServerConn); c.Open(); return c; } catch { return null; }
     }
 

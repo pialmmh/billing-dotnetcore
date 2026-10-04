@@ -6,11 +6,11 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.sql.ISqlExecutor;
+import com.telcobright.billing.testsupport.MySqlLab;
 import com.telcobright.billing.mediation.sql.CountingAutoIncrementManager;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -34,7 +34,6 @@ import org.junit.jupiter.api.Test;
 class ChargeableWriterMySqlIntegrationTests {
     private static final String ServerUrl = "jdbc:mysql://127.0.0.1:3306/";
     private static final String User = "root";
-    private static final String Password = "123456";
     private static final String Db = "billing_chargeable_test";
 
     private Connection conn;
@@ -59,7 +58,7 @@ class ChargeableWriterMySqlIntegrationTests {
 
     private static Connection tryOpen() {
         try {
-            return DriverManager.getConnection(ServerUrl, User, Password);
+            return MySqlLab.OpenOrNull(ServerUrl, User);
         } catch (Exception e) {
             return null;
         }
@@ -68,7 +67,7 @@ class ChargeableWriterMySqlIntegrationTests {
     @BeforeEach
     void setUp() {
         conn = tryOpen();
-        assumeTrue(conn != null, "local MySQL not reachable — skipping");
+        assumeTrue(conn != null, MySqlLab.WhySkipped());
     }
 
     @AfterEach

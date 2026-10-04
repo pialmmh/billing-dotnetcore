@@ -53,7 +53,8 @@ dotnet build                       # expect 0 warnings / 0 errors (xUnit analyze
 dotnet test --no-build             # 95 tests, 0 skipped (@a11f5da)
 dotnet run --project src/Billing --launch-profile http   # boots vs LIVE config-manager, :5293 (h2c)
 ```
-- **Local MySQL** (integration tests): lxc container, `127.0.0.1:3306` (NOT localhost), `root`/`123456`,
+- **Local MySQL** (integration tests): lxc container, `127.0.0.1:3306` (NOT localhost), user `root` (its password is in no file
+  of this repository: the tests read it from the environment variable `BC_LAB_MYSQL_PASSWORD` and skip without it),
   MySQL 5.7, driver MySqlConnector. Tests create their own DBs and **skip** if mysql is down. DB is behind
   seams (`IRateLoader`, `ISummaryStore`, `ISqlExecutor`) so everything is unit-testable without a DB.
 - **config-manager** (dev): `http://103.95.96.78:7072`, tenant `ccl78` (from `config/tenants.yml` +
