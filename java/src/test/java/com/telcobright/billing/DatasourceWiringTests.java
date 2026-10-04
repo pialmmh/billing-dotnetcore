@@ -42,7 +42,7 @@ class DatasourceWiringTests {
 
     @Test
     void a_profile_that_names_no_kind_gets_mysqls_as_before() {
-        DatasourceOptions ds = Profile("billing:\n  datasource:\n    host: \"103.95.96.77\"\n    username: \"u\"\n");
+        DatasourceOptions ds = Profile("billing:\n  datasource:\n    host: \"10.0.0.5\"\n    username: \"u\"\n");
 
         ITenantConnectionFactory connections = wiring.connectionFactory(ds);
 

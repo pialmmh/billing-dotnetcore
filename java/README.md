@@ -19,6 +19,12 @@
 > **3 · A new consumer group starts at `earliest`** (`billing.cdr-ingest.auto-offset-reset`). A group that already has offsets is not
 > affected; `ccl78` dev keeps `latest` in its profile.
 >
+> **4 · A start says its endpoints first — and THE JAR, STARTED WITHOUT A CONFIGURATION OF ITS OWN, IS `ccl78` DEV.**
+> The `application.properties` inside the jar enables tenant `ccl78`, profile `dev`, and that profile names boxes that run today
+> (its config-manager, its Kafka, its MySQL) with the cdr ingest ON. `java -jar …/quarkus-run.jar` or `mvn quarkus:dev` from a
+> directory with no `config/application.properties` of its own is that deployment: it fetches its tree, joins its consumer group,
+> writes to its database. A lab start goes through `tools/lab/start-local-only.sh` only — see "A start in a lab" below.
+>
 > The profile of a PostgreSQL tenant: `../docs/postgres-tenant-profile.md`. The wire: `../docs/cdr-kafka-ingest-contract.md`.
 
 A **faithful 1:1 clone** of the .NET 8 service in `../src/Billing`, ported to **Java 21 / Quarkus 3.24**.
@@ -58,9 +64,42 @@ mvn -f java/pom.xml test                 # tests only (MySQL integration tests s
 mvn -f java/pom.xml test -Dbc.lab.pg.url=jdbc:postgresql://127.0.0.1:7743/routesphere
                                          # + the PostgreSQL lab tests (a throwaway PostgreSQL with the roles of
                                          #   prime-context's postgres-tenancy.md §4); without the key they are SKIPPED
-mvn -f java/pom.xml quarkus:dev          # dev mode (boots vs live config-manager; gRPC on :9000)
-java -jar java/target/quarkus-app/quarkus-run.jar
+mvn -f java/pom.xml quarkus:dev          # dev mode — AS ccl78 DEV: it dials that deployment's boxes (top of this page, 4)
+java -jar java/target/quarkus-app/quarkus-run.jar   # the same, unless the directory has its own config/application.properties
+java/tools/lab/start-local-only.sh java/target/quarkus-app <run dir> [-e NAME]...   # a LAB start: this box only
 ```
+
+### A start in a lab
+
+Every start says, as its first log lines, where the active profile was read from and each address it is about to dial —
+before the first of them is dialed (`StartEndpoints`; the four option blocks that hold an address reach the application only
+through it):
+
+```
+endpoints of this start (nothing has been dialed yet) — tenant btcl, profile lab: the file /…/config/tenants/btcl/lab/profile-lab.yml
+endpoint: the tenant tree = http://10.10.252.1:7754  (billing.config-manager.base-url)
+endpoint: the doorbell's brokers = 127.0.0.1:7792  (billing.config-events.bootstrap-servers)
+endpoint: the datasource = postgresql://127.0.0.1:7743/routesphere  (billing.datasource.host)
+endpoint: the cdr topic's brokers = 127.0.0.1:7792  (billing.cdr-ingest.bootstrap-servers)
+endpoint: the summary ping's brokers = 127.0.0.1:7792  (billing.summary.bootstrap-servers)
+```
+
+A start that fell back to a profile the jar carries says `THE JAR'S OWN config/tenants/…` in that first line.
+
+A lab start is made with `tools/lab/start-local-only.sh <quarkus-app dir> <run dir> [-e NAME]... [-- <java option>...]`:
+
+1. **before anything is started**, `tools/lab/lab-endpoints.py` says every address the run directory's configuration names
+   (over the jar's own build-time defaults) and refuses unless each is on this box. A run directory without its own
+   `config/application.properties` is refused.
+2. the service is started in the run directory with an emptied environment (PATH, HOME, LANG, JAVA_HOME and the variables
+   named with `-e` — a secret is named, its value is on no command line) and with `-Dbilling.lab.local-only=true`.
+3. with that key billing-core judges the endpoints IT resolved and refuses the start itself —
+   `REFUSING TO START (billing.lab.local-only=true): …` naming each — when one is not this box. Put the key in the lab's
+   `config/application.properties` too.
+
+"This box" is the word `localhost`, a loopback address, or an address one of this box's own interfaces holds (a lab bridge).
+A host NAME is never looked up — the lookup itself would leave the box — and is refused. The launcher works for any Quarkus
+jar (a lab's prime-context is started with it too); step 3 is billing-core's own.
 - gRPC server: `:9000` (h2c, separate server).
 - Tenant config (routesphere convention): registry (enable/disable + active profile) in
   `application.properties` (`billing.tenants[i].*`); per-profile YAML in

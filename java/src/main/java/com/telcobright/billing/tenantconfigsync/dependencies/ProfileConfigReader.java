@@ -277,23 +277,17 @@ public final class ProfileConfigReader {
         }
 
         // optional external dir (ops edits / deploy rsync) — used only when the file is actually present there.
-        Optional<String> overrideDir = ConfigProvider.getConfig().getOptionalValue("billing.config.dir", String.class);
-        if (overrideDir.isPresent()) {
-            Path p = Path.of(overrideDir.get(), "tenants", active.Name(), active.Profile(),
-                "profile-" + active.Profile() + ".yml");
-            if (Files.exists(p)) {
-                try {
-                    return Files.readString(p);
-                } catch (IOException ex) {
-                    throw new UncheckedIOException(ex);
-                }
+        Path file = ExternalProfileFile(active);
+        if (file != null) {
+            try {
+                return Files.readString(file);
+            } catch (IOException ex) {
+                throw new UncheckedIOException(ex);
             }
         }
 
         // bundled resource: config/tenants/<name>/<profile>/profile-<profile>.yml
-        String resource = ConfigBase + "/tenants/" + active.Name() + "/" + active.Profile()
-            + "/profile-" + active.Profile() + ".yml";
-        try (InputStream in = ProfileConfigReader.class.getClassLoader().getResourceAsStream(resource)) {
+        try (InputStream in = ProfileConfigReader.class.getClassLoader().getResourceAsStream(BundledProfileResource(active))) {
             if (in == null) {
                 return null;
             }
@@ -301,6 +295,46 @@ public final class ProfileConfigReader {
         } catch (IOException ex) {
             throw new UncheckedIOException(ex);
         }
+    }
+
+    /** The active tenant's profile file under {@code billing.config.dir} — when that key is set and the file is
+     * there; else null (the jar's own resource is then read). */
+    private static Path ExternalProfileFile(SelectedTenant active) {
+        Optional<String> overrideDir = ConfigProvider.getConfig().getOptionalValue("billing.config.dir", String.class);
+        if (overrideDir.isEmpty()) {
+            return null;
+        }
+        Path p = Path.of(overrideDir.get(), "tenants", active.Name(), active.Profile(),
+            "profile-" + active.Profile() + ".yml");
+        return Files.exists(p) ? p : null;
+    }
+
+    private static String BundledProfileResource(SelectedTenant active) {
+        return ConfigBase + "/tenants/" + active.Name() + "/" + active.Profile()
+            + "/profile-" + active.Profile() + ".yml";
+    }
+
+    /**
+     * Where the active (first enabled) tenant's profile is read from, in words — the first line of a start's log
+     * ({@code StartEndpoints}). A start that fell back to a profile THE JAR carries is then seen for what it is.
+     */
+    public static String ActiveProfileSource(TenantSelection selection) {
+        SelectedTenant active = selection.Enabled().stream().findFirst().orElse(null);
+        if (active == null) {
+            return "no tenant is enabled: the built-in defaults";
+        }
+        String who = "tenant " + active.Name() + ", profile " + active.Profile() + ": ";
+        Path file = ExternalProfileFile(active);
+        if (file != null) {
+            return who + "the file " + file.toAbsolutePath().normalize();
+        }
+        String resource = BundledProfileResource(active);
+        boolean theJarHasOne = ProfileConfigReader.class.getClassLoader().getResource(resource) != null;
+        String configDir = ConfigProvider.getConfig().getOptionalValue("billing.config.dir", String.class).orElse(null);
+        return who + (theJarHasOne
+            ? "THE JAR'S OWN " + resource + (configDir == null ? " (billing.config.dir is not set)"
+                : " (no such file under billing.config.dir = " + configDir + ")")
+            : "no profile file anywhere: the built-in defaults");
     }
 
     private static BillingYaml billingOf(String yaml) {

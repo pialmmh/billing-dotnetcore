@@ -45,6 +45,52 @@ class ProfileConfigReaderTests {
         assertEquals("dev", sel.Enabled().get(0).Profile()); // active profile per tenant
     }
 
+    // ── where the active profile is read from, in words (the first line of a start's log) ─────────────────────
+
+    private static TenantSelection Selected(String tenant, String profile, boolean enabled) {
+        TenantSelection selection = new TenantSelection();
+        selection.Tenants = java.util.List.of(new SelectedTenant(tenant, enabled, profile));
+        return selection;
+    }
+
+    @Test
+    void A_profile_under_the_config_dir_is_named_by_its_file(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir)
+            throws Exception {
+        java.nio.file.Path file = dir.resolve("tenants/btcl/lab/profile-lab.yml");
+        java.nio.file.Files.createDirectories(file.getParent());
+        java.nio.file.Files.writeString(file, "billing:\n  config-manager:\n    base-url: \"http://127.0.0.1:7754\"\n");
+        System.setProperty("billing.config.dir", dir.toString());
+        try {
+            assertEquals("tenant btcl, profile lab: the file " + file.toAbsolutePath().normalize(),
+                    ProfileConfigReader.ActiveProfileSource(Selected("btcl", "lab", true)));
+            assertEquals("http://127.0.0.1:7754", ProfileConfigReader.ReadOptions(Selected("btcl", "lab", true)).ConfigManager.BaseUrl,
+                    "and that file is the one that is read");
+        } finally {
+            System.clearProperty("billing.config.dir");
+        }
+    }
+
+    @Test
+    void A_start_that_falls_back_to_a_profile_the_jar_carries_says_so_in_capitals(@org.junit.jupiter.api.io.TempDir java.nio.file.Path emptyDir) {
+        System.setProperty("billing.config.dir", emptyDir.toString());     // a config dir that holds no such profile
+        try {
+            assertEquals("tenant ccl78, profile dev: THE JAR'S OWN config/tenants/ccl78/dev/profile-dev.yml"
+                    + " (no such file under billing.config.dir = " + emptyDir + ")",
+                    ProfileConfigReader.ActiveProfileSource(Selected("ccl78", "dev", true)));
+        } finally {
+            System.clearProperty("billing.config.dir");
+        }
+        assertEquals("tenant ccl78, profile dev: THE JAR'S OWN config/tenants/ccl78/dev/profile-dev.yml (billing.config.dir is not set)",
+                ProfileConfigReader.ActiveProfileSource(Selected("ccl78", "dev", true)));
+    }
+
+    @Test
+    void A_tenant_with_no_profile_anywhere_and_a_registry_with_nobody_enabled_run_on_the_built_in_defaults() {
+        assertEquals("tenant nobody, profile lab: no profile file anywhere: the built-in defaults",
+                ProfileConfigReader.ActiveProfileSource(Selected("nobody", "lab", true)));
+        assertEquals("no tenant is enabled: the built-in defaults", ProfileConfigReader.ActiveProfileSource(Selected("ccl78", "dev", false)));
+    }
+
     @Test
     void Reads_datasource_block_with_kebab_keys() {
         String yaml =

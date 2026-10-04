@@ -30,6 +30,8 @@ import com.telcobright.billing.tenantconfigsync.spi.IConfigManagerClient;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Singleton;
+import org.eclipse.microprofile.config.ConfigProvider;
+import org.jboss.logging.Logger;
 
 import java.net.http.HttpClient;
 
@@ -56,28 +58,41 @@ public class BillingConfig {
         return ProfileConfigReader.ReadSelection();
     }
 
+    // The four blocks of the profile that hold an ADDRESS are read here, once: said in the log before anything is
+    // dialed and — on a lab start (billing.lab.local-only=true) — refused unless every host is this box. The four
+    // producers below hand the blocks out FROM that object: no bean can hold an address that was not said first.
     @Produces
     @Singleton
-    public TenantConfigSyncOptions tenantConfigSyncOptions(TenantSelection selection) {
-        return ProfileConfigReader.ReadOptions(selection);
+    public StartEndpoints startEndpoints(TenantSelection selection) {
+        StartEndpoints resolved = new StartEndpoints(ProfileConfigReader.ReadOptions(selection),
+                ProfileConfigReader.ReadDatasource(selection), ProfileConfigReader.ReadCdrIngest(selection),
+                ProfileConfigReader.ReadSummary(selection));
+        return StartEndpoints.SaidAndJudged(resolved, ProfileConfigReader.ActiveProfileSource(selection),
+                StartEndpoints.IsALabStart(ConfigProvider.getConfig()), Logger.getLogger(StartEndpoints.class)::info);
     }
 
     @Produces
     @Singleton
-    public DatasourceOptions datasourceOptions(TenantSelection selection) {
-        return ProfileConfigReader.ReadDatasource(selection);
+    public TenantConfigSyncOptions tenantConfigSyncOptions(StartEndpoints said) {
+        return said.Sync();
     }
 
     @Produces
     @Singleton
-    public SummaryOutboxOptions summaryOutboxOptions(TenantSelection selection) {
-        return ProfileConfigReader.ReadSummary(selection);
+    public DatasourceOptions datasourceOptions(StartEndpoints said) {
+        return said.Datasource();
     }
 
     @Produces
     @Singleton
-    public CdrIngestOptions cdrIngestOptions(TenantSelection selection) {
-        return ProfileConfigReader.ReadCdrIngest(selection);
+    public SummaryOutboxOptions summaryOutboxOptions(StartEndpoints said) {
+        return said.Summary();
+    }
+
+    @Produces
+    @Singleton
+    public CdrIngestOptions cdrIngestOptions(StartEndpoints said) {
+        return said.Ingest();
     }
 
     @Produces
