@@ -128,53 +128,78 @@ def yaml_values(path):
     return found
 
 
-def main(argv):
-    if len(argv) < 3:
-        print(__doc__)
-        return 2
-    app_dir, run_dir, extra = argv[1], argv[2], argv[3:]
+def effective_properties(app_dir, run_dir, set_on_the_command_line):
+    """The properties as the service will see them — or None, with the reason said, when the run directory has no
+    configuration of its own or the jar's build-time defaults cannot be read."""
     own = os.path.join(run_dir, 'config', 'application.properties')
     if not os.path.isfile(own):
         print('REFUSED: %s does not exist. A start from here would run on what the jar itself carries — its build-time'
               ' defaults and, in this repo, the registry of a real deployment.' % own)
-        return 2
+        return None
     bundled = bundled_properties(app_dir)
     if bundled is None:
         print('REFUSED: no jar with an application.properties under %s/app — the build-time defaults cannot be read,'
               ' so they cannot be judged.' % app_dir)
-        return 2
-    props = effective([bundled, properties_of(open(own, encoding='utf-8').read()), properties_of('\n'.join(extra))])
-    held = addresses_of_this_box()
-    elsewhere = []
+        return None
+    return effective([bundled, properties_of(open(own, encoding='utf-8').read()),
+                      properties_of('\n'.join(set_on_the_command_line))])
 
-    print('endpoints of a start in %s  (jar: %s)' % (os.path.abspath(run_dir), os.path.abspath(app_dir)))
+
+def say_and_judge(what, hosts, held):
+    """One line for each host of one setting; [what] when a host is not this box, else []."""
+    elsewhere = []
+    for host in hosts:
+        here, words = where(host, held)
+        print('  dials    %s   [%s: %s]' % (what, host, words))
+        if not here and what not in elsewhere:
+            elsewhere.append(what)
+    return elsewhere
+
+
+def say_the_properties(props, held):
+    """Every property that names an address: a listener is shown, a dialed one is judged. Returns what is elsewhere."""
+    elsewhere = []
     for key in sorted(props):
         value = expanded(props[key], props)
         hosts = hosts_of(value)
-        if not hosts:
-            continue
-        if key in LISTENERS:
+        if hosts and key in LISTENERS:
             print('  listens  %s = %s' % (key, value))
-            continue
-        for host in hosts:
-            here, words = where(host, held)
-            print('  dials    %s = %s   [%s: %s]' % (key, value, host, words))
-            if not here:
-                elsewhere.append('%s = %s' % (key, value))
+        elif hosts:
+            elsewhere += say_and_judge('%s = %s' % (key, value), hosts, held)
+    return elsewhere
+
+
+def say_the_yaml_files(run_dir, held):
+    """Every address in every YAML file of the lab's own configuration (a tenant profile). Returns what is elsewhere."""
+    elsewhere = []
     for path in sorted(glob.glob(os.path.join(run_dir, 'config', '**', '*.y*ml'), recursive=True)):
         for key, value, line in yaml_values(path):
-            for host in hosts_of(value):
-                here, words = where(host, held)
-                print('  dials    %s:%d %s = %s   [%s: %s]' % (os.path.relpath(path, run_dir), line, key, value, host, words))
-                if not here:
-                    elsewhere.append('%s:%d %s = %s' % (os.path.relpath(path, run_dir), line, key, value))
-    if elsewhere:
-        print('REFUSED: a lab start dials only this box, and these are elsewhere:')
-        for e in elsewhere:
-            print('  ' + e)
-        return 1
-    print('every address is on this box')
-    return 0
+            what = '%s:%d %s = %s' % (os.path.relpath(path, run_dir), line, key, value)
+            elsewhere += say_and_judge(what, hosts_of(value), held)
+    return elsewhere
+
+
+def verdict(elsewhere):
+    if not elsewhere:
+        print('every address is on this box')
+        return 0
+    print('REFUSED: a lab start dials only this box, and these are elsewhere:')
+    for setting in elsewhere:
+        print('  ' + setting)
+    return 1
+
+
+def main(argv):
+    if len(argv) < 3:
+        print(__doc__)
+        return 2
+    app_dir, run_dir, set_on_the_command_line = argv[1], argv[2], argv[3:]
+    props = effective_properties(app_dir, run_dir, set_on_the_command_line)
+    if props is None:
+        return 2
+    held = addresses_of_this_box()
+    print('endpoints of a start in %s  (jar: %s)' % (os.path.abspath(run_dir), os.path.abspath(app_dir)))
+    return verdict(say_the_properties(props, held) + say_the_yaml_files(run_dir, held))
 
 
 if __name__ == '__main__':
