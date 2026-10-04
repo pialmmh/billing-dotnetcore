@@ -8,7 +8,7 @@ things; this page says where each stands.
 | # | item | state |
 |---|---|---|
 | 1 | the ping must not hold a batch (R-0001 §1.2) | **built, in this commit** — the break table, the gate and the lab run follow |
-| 2 | F6: `LegacyDedupProdRehearsal` reads its password from the environment, by the name of a variable | not started |
+| 2 | F6: `LegacyDedupProdRehearsal` reads its password from the environment, by the name of a variable | **built** — the break table and the gate follow |
 | 3 | F1, prepared on a branch of its own (`no-bundled-tenant`), not merged | not started |
 
 ---
@@ -47,7 +47,22 @@ topic is back; a ping that is switched off starts nothing.
 
 ## 2 · F6 — the rehearsal's password
 
-*(not started)*
+`LegacyDedupProdRehearsal` (a by-name rehearsal against production; not in the suite, and it stays out) took its password as
+`-Drehearsal.pw=…`.
+
+| | |
+|---|---|
+| now | `-Drehearsal.pw-env=<NAME>` names an environment variable; the password is read from the environment, by that name (`testsupport/RehearsalSecret`). The class's header says how: `read -rs REHEARSAL_PW && export REHEARSAL_PW`, then the name on the line |
+| the old property | refused when someone still passes it — `-Drehearsal.pw is REFUSED: a password is never on a command line … What it holds was not used and is not printed … If the password was typed on this line, change it.` Refused beside the new property too, and when it is empty |
+| no name, a name whose variable is not set or empty | refused in words; the variable is named; there is no fallback |
+| what is given where the name belongs but is not a name (the password itself, by mistake) | refused, and NOT printed |
+| tests | `RehearsalSecretTests` (6, in the suite). The rehearsal class itself was run by name four times against `127.0.0.1:1` — a closed port of this box, never a real one: no url → skipped, as before; the old property → refused in those words; the variable named and not set → refused by its name; named and set → it goes on to the connection (nothing listens: `Communications link failure`) |
+
+**One more of the same kind, in my own B10 code** (say if you do not want it): a refusal of `DatasourceSecret` printed what the profile
+holds in `password-ref` when that is not `env:<NAME>`, and when `password` is there too. A secret typed into the wrong key would have
+reached a log. Both refusals no longer print it (`DatasourceSecretTests`, one more test).
+
+*(the break table and the suite's numbers: filled in below when they are done)*
 
 ## 3 · F1 — the jar's own registry, on its own branch
 

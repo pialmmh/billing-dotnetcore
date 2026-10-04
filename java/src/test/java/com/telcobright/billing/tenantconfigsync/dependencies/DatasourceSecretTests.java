@@ -88,6 +88,23 @@ class DatasourceSecretTests {
     }
 
     @Test
+    void a_secret_typed_into_password_ref_is_refused_and_not_printed() {
+        String typedIntoTheWrongKey = "S3cr3t-typed-where-the-name-belongs";
+        DatasourceOptions wrongKey = new DatasourceOptions();
+        wrongKey.PasswordRef = typedIntoTheWrongKey;
+        DatasourceOptions both = new DatasourceOptions();
+        both.PasswordRef = typedIntoTheWrongKey;
+        both.Password = "also-inline";
+
+        for (DatasourceOptions ds : new DatasourceOptions[] {wrongKey, both}) {
+            IllegalStateException refused = assertThrows(IllegalStateException.class,
+                    () -> DatasourceSecret.PasswordOf(ds, TheUnitsEnvironment::get));
+
+            assertFalse(refused.getMessage().contains(typedIntoTheWrongKey), "not printed: " + refused.getMessage());
+        }
+    }
+
+    @Test
     void no_message_of_a_refusal_carries_the_value_of_any_variable() {
         DatasourceOptions ds = ProfileConfigReader.ReadDatasourceFromYaml(BedProfile.replace("BILLING_CORE_PASSWORD", "OTHER"));
 

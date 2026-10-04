@@ -17,7 +17,8 @@ import java.util.regex.Pattern;
  *   <li>{@code password: …} — the value inline, for the deployments that still have it there. Unchanged.</li>
  *   <li>both — refused: two sources of one secret is how the wrong one gets used.</li>
  * </ul>
- * The value is never logged and never part of a message: only the variable's NAME is.
+ * The value is never logged and never part of a message: only the variable's NAME is — and a {@code password-ref}
+ * that is not a name is not printed either (it may be the secret itself, typed into the wrong key).
  */
 public final class DatasourceSecret {
     private DatasourceSecret() {}
@@ -35,16 +36,17 @@ public final class DatasourceSecret {
         boolean hasInline = ds.Password != null && !ds.Password.isEmpty();
         if (!hasRef) return ds.Password;
         if (hasInline)
-            throw new IllegalStateException("billing.datasource names its password twice: 'password' and 'password-ref' ("
-                    + ds.PasswordRef + "). Keep one — on a deployment that reads its secrets from the environment, 'password-ref'.");
+            throw new IllegalStateException("billing.datasource names its password twice: 'password' and 'password-ref'."
+                    + " Keep one — on a deployment that reads its secrets from the environment, 'password-ref'.");
         return FromTheEnvironment(VariableNamedBy(ds.PasswordRef), environment);
     }
 
     private static String VariableNamedBy(String ref) {
         Matcher m = EnvRef.matcher(ref.trim());
         if (!m.matches())
-            throw new IllegalStateException("billing.datasource.password-ref must be 'env:<VARIABLE NAME>'; '" + ref
-                    + "' is not (a secret is read from the unit's environment by its variable's name, nowhere else)");
+            throw new IllegalStateException("billing.datasource.password-ref must be 'env:<VARIABLE NAME>' (a secret is read"
+                    + " from the unit's environment by its variable's name, nowhere else). What the profile holds there is"
+                    + " not that, and is not printed: it may be a secret typed into the wrong key");
         return m.group(1);
     }
 

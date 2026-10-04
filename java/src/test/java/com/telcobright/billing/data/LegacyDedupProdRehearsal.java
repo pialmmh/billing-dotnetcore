@@ -1,8 +1,10 @@
 // READ-ONLY production rehearsal of the EXACT flag-ON lookup path (MySqlCdrBatchRunner.FilterLegacyOwned +
 // jdbcOwnedSeqs) against real .110 legacy data. NO writes. Guarded by system properties so it is SKIPPED in
-// normal CI; invoke explicitly, e.g.:
-//   mvn -Dtest=LegacyDedupProdRehearsal test \
-//     -Drehearsal.url='jdbc:mysql://HOST:3306/telcobright' -Drehearsal.user=... -Drehearsal.pw=...
+// normal CI; invoke explicitly. The PASSWORD is never on the command line: it is read from the environment, by the
+// NAME of a variable (testsupport/RehearsalSecret). -Drehearsal.pw=… is refused.
+//   read -rs REHEARSAL_PW && export REHEARSAL_PW
+//   mvn -Dtest=LegacyDedupProdRehearsal -Dsurefire.failIfNoSpecifiedTests=false test \
+//     -Drehearsal.url='jdbc:mysql://HOST:3306/telcobright' -Drehearsal.user=... -Drehearsal.pw-env=REHEARSAL_PW
 package com.telcobright.billing.data;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -21,6 +23,7 @@ import java.util.TreeSet;
 import org.junit.jupiter.api.Test;
 
 import com.telcobright.billing.mediation.engine.models.cdr;
+import com.telcobright.billing.testsupport.RehearsalSecret;
 
 /** Proves cdr-owned→SKIP, cdrerror-owned→SKIP, neither→WOULD_PROCESS on live .110, and schema isolation. */
 class LegacyDedupProdRehearsal {
@@ -44,7 +47,8 @@ class LegacyDedupProdRehearsal {
         String url = p("rehearsal.url");
         assumeTrue(url != null && !url.isBlank(), "rehearsal.url not set — skipping prod rehearsal");
 
-        try (Connection conn = DriverManager.getConnection(url, p("rehearsal.user"), p("rehearsal.pw"))) {
+        String password = RehearsalSecret.Password();   // from the environment; a password on the line is refused
+        try (Connection conn = DriverManager.getConnection(url, p("rehearsal.user"), password)) {
             conn.setReadOnly(true);                 // belt: advise the driver this session is read-only
             conn.setAutoCommit(true);
             String schema = conn.getCatalog();
