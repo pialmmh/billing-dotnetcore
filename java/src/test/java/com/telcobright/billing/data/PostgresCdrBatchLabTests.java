@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -305,18 +306,31 @@ class PostgresCdrBatchLabTests {
     void a_batch_waits_for_its_tenants_lock_only_so_long_and_the_connection_stays_usable() throws SQLException {
         PostgresEdge patient = Edge();
         PostgresEdge impatient = new PostgresEdge(new PostgresTenantTables(PostgresTenantTables.Options.Defaults()), 1);
+        // This test's OWN guard, so that a wait without a limit is a red test and never a hung one: the session gives
+        // up any statement after 20 s. The edge's limit (1 s) must end the wait long before that, and with the lock's
+        // own error (55P03, lock_not_available) — not with this guard's (57014, query_canceled).
+        try (Statement guard = conn.createStatement()) {
+            guard.execute("set statement_timeout = '20s'");
+        }
         try (Connection busy = PostgresLab.Factory().Open(Schema)) {
             busy.setAutoCommit(false);
             patient.AcquireBatchLock(busy, "billing_batch_" + Schema);          // another batch of this tenant is running
             conn.setAutoCommit(false);
+            long asked = System.nanoTime();
 
             RuntimeException gaveUp = assertThrows(RuntimeException.class, () -> impatient.AcquireBatchLock(conn, "billing_batch_" + Schema));
 
+            long waitedMs = (System.nanoTime() - asked) / 1_000_000;
             assertTrue(gaveUp.getMessage().contains("billing_batch_" + Schema + " not acquired within 1s"), gaveUp.getMessage());
+            assertEquals("55P03", ((SQLException) gaveUp.getCause()).getSQLState(), "the lock's own time limit ended the wait");
+            assertTrue(waitedMs < 10_000, "it gave up after about its 1 s, not after this test's 20 s guard: " + waitedMs + " ms");
             patient.ReleaseBatchLock(busy, "billing_batch_" + Schema);
             busy.commit();
         }
         conn.setAutoCommit(true);
+        try (Statement guard = conn.createStatement()) {
+            guard.execute("reset statement_timeout");
+        }
 
         var result = Runner().Run(conn, Mediation(), Retail5, List.of(Call("uid-1", When)));   // the same connection, afterwards
 
@@ -330,7 +344,8 @@ class PostgresCdrBatchLabTests {
     /** The edge of a real batch, watched from a second session at the two moments that matter. */
     private static final class WatchedEdge implements DatasourceEdge {
         final PostgresEdge real = Edge();
-        String lockHeldWhileWriting, rowsVisibleAtRelease;
+        String lockHeldWhileWriting;
+        final List<String> rowsVisibleAtEachRelease = new java.util.ArrayList<>();
 
         @Override public SqlDialect Dialect() { return real.Dialect(); }
         @Override public String SchemaOf(Connection conn) { return real.SchemaOf(conn); }
@@ -354,7 +369,7 @@ class PostgresCdrBatchLabTests {
 
         @Override
         public void ReleaseBatchLock(Connection conn, String name) {
-            rowsVisibleAtRelease = PostgresLab.Scalar("select count(*) from " + Schema + ".summary_affected");
+            rowsVisibleAtEachRelease.add(PostgresLab.Scalar("select count(*) from " + Schema + ".summary_affected"));
             real.ReleaseBatchLock(conn, name);
         }
     }
@@ -366,7 +381,8 @@ class PostgresCdrBatchLabTests {
         MySqlCdrBatchRunner.On(watched).Run(conn, Mediation(), Retail5, List.of(Call("uid-1", When)));
 
         assertEquals("t", watched.lockHeldWhileWriting, "held while the batch writes");
-        assertEquals("1", watched.rowsVisibleAtRelease, "at the release the outbox row is already committed: ids are seen in commit order");
+        assertEquals(List.of("1"), watched.rowsVisibleAtEachRelease,
+                "ONE release, and at it the outbox row is already committed: ids are seen in commit order");
         assertEquals("t", PostgresLab.Scalar("select pg_try_advisory_lock(" + PostgresEdge.LockKeyOf("billing_batch_" + Schema)
                 + ")"), "and it is free afterwards");
     }
