@@ -106,13 +106,16 @@ public final class HttpConfigManagerClient implements IConfigManagerClient {
                 .build();
 
             HttpResponse<InputStream> resp = _http.send(request, HttpResponse.BodyHandlers.ofInputStream());
-            int status = resp.statusCode();
-            if (status < 200 || status >= 300) {
-                throw new ConfigManagerUnavailableException(tenantName,
-                    "config-manager " + _baseUrl + url + " returned " + status + " for tenant '" + tenantName + "'");
-            }
-
+            // The body is closed on EVERY path. An error body left unread and unclosed strands its connection —
+            // never pooled, never closed — and once config-manager hangs up it sits in CLOSE_WAIT holding a file
+            // descriptor: one per failed call (134 within three hours of /get-rates-by-date 500s, 2026-10-07).
             try (InputStream stream = resp.body()) {
+                int status = resp.statusCode();
+                if (status < 200 || status >= 300) {
+                    throw new ConfigManagerUnavailableException(tenantName,
+                        "config-manager " + _baseUrl + url + " returned " + status + " for tenant '" + tenantName + "'");
+                }
+
                 TenantDto dto = Json.readValue(stream, TenantDto.class);
                 if (dto == null) {
                     throw new ConfigManagerUnavailableException(tenantName,
@@ -152,13 +155,13 @@ public final class HttpConfigManagerClient implements IConfigManagerClient {
                 .build();
 
             HttpResponse<InputStream> resp = _http.send(request, HttpResponse.BodyHandlers.ofInputStream());
-            int status = resp.statusCode();
-            if (status < 200 || status >= 300) {
-                throw new ConfigManagerUnavailableException(tenantDbName,
-                    "config-manager " + _baseUrl + url + " returned " + status + " for '" + tenantDbName + "' " + date);
-            }
+            try (InputStream stream = resp.body()) {   // closed on every path — see GetTenantRoot
+                int status = resp.statusCode();
+                if (status < 200 || status >= 300) {
+                    throw new ConfigManagerUnavailableException(tenantDbName,
+                        "config-manager " + _baseUrl + url + " returned " + status + " for '" + tenantDbName + "' " + date);
+                }
 
-            try (InputStream stream = resp.body()) {
                 Map<Integer, Map<String, Rate>> rates =
                     Json.readValue(stream, new TypeReference<Map<Integer, Map<String, Rate>>>() {});
                 return rates != null ? rates : Map.of();
