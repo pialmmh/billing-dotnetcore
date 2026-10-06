@@ -12,6 +12,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The transaction boundary for ONE summary roll-up sweep of a tenant schema — the CONSUMER-side twin of
@@ -24,13 +26,19 @@ import java.util.List;
  * crash re-folds the SAME page and never skips a row (the offset only moves on commit) and never double-counts
  * (the sum_voice writes rolled back with it). At-least-once with an atomic cursor = effectively once.</p>
  *
- * <p>{@link #EnsureOffsetTable} is separate and MUST be called OUTSIDE this transaction (a {@code CREATE TABLE}
+ * <p>{@link #EnsureOffsetTableOnce} is separate and MUST be called OUTSIDE this transaction (a {@code CREATE TABLE}
  * implicitly commits in MySQL, which would split the sweep's atomic unit).</p>
  */
 public final class MySqlSummaryBatchRunner {
 
     /** The outcome of one sweep: outbox rows consumed, the new cursor value, and customer-leg calls folded. */
     public record Result(int rowsConsumed, long newOffset, int callsFolded) {}
+
+    // Schemas whose summary_offset is known to exist. MySQL binlogs CREATE TABLE IF NOT EXISTS even when the table
+    // is already there, and every binlogged DDL reaches the CDC pipeline as a config change — issued on each 2s
+    // sweep it became one config-manager reload + config event per sweep (~29/min, 2026-10-07). So the check runs
+    // once per schema per process, and the DDL only when the table is really missing.
+    private final Set<String> _offsetTableReady = ConcurrentHashMap.newKeySet();
 
     /** Fold the next page (up to {@code maxRows}) of the tenant's {@code summary_affected} into sum_voice. */
     public Result Run(Connection conn, String entityType, int maxRows, int segmentSize) {
@@ -82,8 +90,41 @@ public final class MySqlSummaryBatchRunner {
         return Run(conn, entityType, maxRows, BatchSqlWriter.DefaultSegmentSize);
     }
 
-    /** Create the per-schema consumer cursor table if absent. Call ONCE per tenant in autocommit mode — never
-     * inside {@link #Run}'s transaction (DDL implicitly commits in MySQL). Idempotent. */
+    /** Make sure this schema's summary_offset exists: a read-only check the first time a schema is seen, a CREATE
+     * only if it is missing, then nothing for the rest of the process. Remembered on success only, so a failed
+     * check is simply retried on the next sweep. Call in autocommit mode — never inside {@link #Run}'s transaction. */
+    public void EnsureOffsetTableOnce(Connection conn) {
+        String schema = Schema(conn);
+        if (_offsetTableReady.contains(schema)) return;
+        if (!OffsetTableExists(conn, schema)) EnsureOffsetTable(conn);
+        _offsetTableReady.add(schema);
+    }
+
+    private static String Schema(Connection conn) {
+        try {
+            String schema = conn.getCatalog();
+            return schema != null ? schema : "";
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** A plain read — unlike the DDL it is never binlogged. Both columns constant, so MySQL opens only that table. */
+    private static boolean OffsetTableExists(Connection conn, String schema) {
+        String where = schema.isEmpty() ? "table_schema=database()" : "table_schema=?";
+        try (PreparedStatement st = conn.prepareStatement(
+                "select count(*) from information_schema.tables where " + where + " and table_name='summary_offset'")) {
+            if (!schema.isEmpty()) st.setString(1, schema);
+            try (ResultSet rs = st.executeQuery()) {
+                return rs.next() && rs.getLong(1) > 0;
+            }
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** Create the per-schema consumer cursor table if absent. Idempotent, but it is DDL: MySQL binlogs it even when
+     * the table exists — sweeps go through {@link #EnsureOffsetTableOnce}. Never inside {@link #Run}'s transaction. */
     public static void EnsureOffsetTable(Connection conn) {
         String ddl = "create table if not exists summary_offset ("
                 + "entity_type varchar(32) not null, "

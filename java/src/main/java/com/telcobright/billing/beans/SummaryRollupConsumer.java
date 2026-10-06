@@ -19,6 +19,8 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 
 /**
  * The summary ROLL-UP consumer loop — the decoupled service that turns each tenant's {@code summary_affected}
@@ -38,7 +40,8 @@ public class SummaryRollupConsumer {
     private static final int DrainTimeoutSeconds = 15;   // cutover drain budget for the in-flight sweep
 
     private final ITenantRegistry tenants;
-    private final MySqlConnectionFactory connections;
+    private final BooleanSupplier datasourceConfigured;
+    private final Function<String, Connection> openSchema;
     private final MySqlSummaryBatchRunner runner;
     private final SummaryRollupOptions opts;
 
@@ -52,8 +55,15 @@ public class SummaryRollupConsumer {
     @Inject
     public SummaryRollupConsumer(ITenantRegistry tenants, MySqlConnectionFactory connections,
             MySqlSummaryBatchRunner runner, SummaryRollupOptions opts) {
+        this(tenants, connections::IsConfigured, connections::Open, runner, opts);
+    }
+
+    /** Test seam: the datasource as two functions, so sweeps can run against a fake JDBC connection. */
+    SummaryRollupConsumer(ITenantRegistry tenants, BooleanSupplier datasourceConfigured,
+            Function<String, Connection> openSchema, MySqlSummaryBatchRunner runner, SummaryRollupOptions opts) {
         this.tenants = tenants;
-        this.connections = connections;
+        this.datasourceConfigured = datasourceConfigured;
+        this.openSchema = openSchema;
         this.runner = runner;
         this.opts = opts;
     }
@@ -63,7 +73,7 @@ public class SummaryRollupConsumer {
             log.info("summary roll-up disabled (billing.summary-rollup.enabled=false) — outbox rows accumulate until a consumer drains them");
             return;
         }
-        if (!connections.IsConfigured()) {
+        if (!datasourceConfigured.getAsBoolean()) {
             log.warn("summary roll-up enabled but datasource credentials are not configured — NOT starting");
             return;
         }
@@ -113,12 +123,12 @@ public class SummaryRollupConsumer {
     }
 
     /** Drain every tenant schema's outbox once; a per-tenant failure is isolated (logged, retried next sweep). */
-    private int SweepAllTenants() {
+    int SweepAllTenants() {
         int total = 0;
         for (String db : TenantDbNames()) {
             if (!running) break;
-            try (Connection conn = connections.Open(db)) {
-                MySqlSummaryBatchRunner.EnsureOffsetTable(conn);   // outside the sweep tx (DDL implicitly commits)
+            try (Connection conn = openSchema.apply(db)) {
+                runner.EnsureOffsetTableOnce(conn);   // once per schema, outside the sweep tx (DDL implicitly commits)
                 while (running) {
                     MySqlSummaryBatchRunner.Result r =
                             runner.Run(conn, opts.EntityType, opts.MaxRowsPerPoll, opts.SegmentSize);
