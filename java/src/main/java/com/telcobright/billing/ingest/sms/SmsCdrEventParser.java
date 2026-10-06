@@ -26,15 +26,17 @@ import java.time.format.DateTimeParseException;
  *   routesphere idCall in SequenceNumber). It is the ownership/dedup identity; the event's {@code sequenceNumber}
  *   (always 0) never replaces it.</li>
  * <li>{@code serviceGroup} is IGNORED: the SMS pipeline makes every record SG20.</li>
- * <li>{@code durationSec} is parsed, never assumed: parts × 60 (60/120/180 …). {@code ChargingStatus = 1} when
- *   it is &gt; 0 (legacy decoder rule).</li>
+ * <li>{@code durationSec} — the record's {@code "durationSec"} property — is the ONLY billing duration, parsed and
+ *   never assumed or derived: billing units = durationSec / 60 (60/120/180 → 1/2/3). {@code ChargingStatus = 1}
+ *   when it is &gt; 0 (legacy decoder rule).</li>
  * <li>{@code message} → {@code AdditionalMetaData} VERBATIM (Base64 is not decoded).</li>
  * <li>{@code startTime} is Asia/Dhaka wall time (as all billing timestamps) and is also the answer time;
  *   {@code ConnectTime} stays NULL, as on legacy SMS rows.</li>
  * <li>{@code campaignId} has no cdr column (legacy did not persist it either) and is not stored.</li>
- * <li>{@code smsCount} (the SMS parts) is optional; when sent it must be an integer &gt;= 1 and equal
- *   {@code durationSec / 60}, otherwise the record is dead-lettered. It has no cdr column and is not stored —
- *   the charge is driven by {@code durationSec}.</li>
+ * <li>{@code smsCount} is the producer's TotalCall / SuccessfulCall count — NOT a multipart count — and has NO
+ *   relationship with {@code durationSec}. It has no billing use and no cdr column: it never affects DurationSec,
+ *   the billed quantity, the rate or the amount. It is only type-checked (an integer &gt;= 0) and otherwise ignored;
+ *   a malformed value is reported as a {@link Parsed#Warning} and never blocks billing.</li>
  * </ul>
  * A record that cannot be billed safely (bad JSON, no/invalid {@code idCall}, no start time, no duration, no called
  * number) is DEAD-LETTERED — never guessed, never billed.
@@ -43,13 +45,14 @@ public final class SmsCdrEventParser {
     private static final ObjectMapper Json = new ObjectMapper();
     private static final DateTimeFormatter SpaceFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    /** One record's outcome: a cdr, or the dead-letter reason; {@code SmsCount} as sent (null when absent). */
-    public record Parsed(cdr Cdr, String DeadLetterReason, Integer SmsCount) {
+    /**
+     * One record's outcome: a cdr, or the dead-letter reason. {@code SmsCount} is the validated value as sent (null
+     * when absent or malformed — informational only, never used for billing); {@code Warning} reports a field that was
+     * ignored (e.g. a malformed smsCount) on a record that is still billed.
+     */
+    public record Parsed(cdr Cdr, String DeadLetterReason, Integer SmsCount, String Warning) {
         public boolean Ok() { return Cdr != null; }
     }
-
-    /** SMS parts are encoded on DurationSec as parts x 60. */
-    static final BigDecimal SecondsPerPart = BigDecimal.valueOf(60);
 
     private final int _fallbackSwitchId;
 
@@ -96,17 +99,15 @@ public final class SmsCdrEventParser {
         BigDecimal duration = Decimal(n, "durationSec");
         if (duration == null) return Dead("missing or non-numeric durationSec");
 
-        // smsCount = the SMS parts. durationSec stays the charging field (parts x 60); when smsCount is sent it must
-        // agree, because two fields disagreeing about how many parts were sent leave any charge a guess.
+        // smsCount (TotalCall / SuccessfulCall) is unrelated to durationSec and has no billing use: type-check it,
+        // keep it informational, and NEVER let it change or block the bill.
         Integer smsCount = null;
+        String warning = null;
         JsonNode countNode = n.get("smsCount");
         if (countNode != null && !countNode.isNull()) {
-            smsCount = Int(n, "smsCount");
-            if (smsCount == null || smsCount < 1) return Dead("smsCount must be an integer >= 1, got '" + countNode.asText() + "'");
-            BigDecimal expected = BigDecimal.valueOf(smsCount).multiply(SecondsPerPart);
-            if (duration.compareTo(expected) != 0)
-                return Dead("durationSec " + duration.toPlainString() + " does not match smsCount " + smsCount
-                        + " x " + SecondsPerPart + " = " + expected);
+            smsCount = NonNegativeInt(countNode);
+            if (smsCount == null)
+                warning = "smsCount ignored: not an integer >= 0: '" + countNode.asText() + "'";
         }
 
         String termCalling = Text(n, "terminatingCallingNumber");
@@ -153,11 +154,24 @@ public final class SmsCdrEventParser {
         c.Tax2 = BigDecimal.ZERO;
         c.XAmount = BigDecimal.ZERO;
         c.YAmount = BigDecimal.ZERO;
-        return new Parsed(c, null, smsCount);
+        return new Parsed(c, null, smsCount, warning);
     }
 
     private static Parsed Dead(String reason) {
-        return new Parsed(null, reason, null);
+        return new Parsed(null, reason, null, null);
+    }
+
+    /** An integer >= 0 (JSON integer, or a numeric string); null for anything else — no rounding, no overflow. */
+    private static Integer NonNegativeInt(JsonNode v) {
+        long value;
+        if (v.isIntegralNumber() && v.canConvertToLong()) {
+            value = v.longValue();
+        } else if (v.isTextual()) {
+            try { value = Long.parseLong(v.asText().trim()); } catch (NumberFormatException ex) { return null; }
+        } else {
+            return null;
+        }
+        return value >= 0 && value <= Integer.MAX_VALUE ? (int) value : null;
     }
 
     private static String Text(JsonNode n, String field) {

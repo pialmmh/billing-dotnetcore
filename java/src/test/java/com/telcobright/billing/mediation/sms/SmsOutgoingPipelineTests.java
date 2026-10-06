@@ -140,29 +140,96 @@ class SmsOutgoingPipelineTests {
         assertEquals("8801", lower.Chargeable().Prefix, "case-sensitive sender: falls back");
     }
 
-    // ───────────────────────────── multipart ─────────────────────────────
+    // ───────────────────────────── smsCount never affects billing ─────────────────────────────
+
+    /** The sample record with {@code durationSec} and {@code smsCount} replaced (null smsCount = field absent). */
+    private static String Record(int durationSec, String smsCount) {
+        String j = SmsTestData.SampleJson.replace("\"durationSec\": 60", "\"durationSec\": " + durationSec);
+        return smsCount == null ? j.replace(",\n  \"smsCount\": 1", "") : j.replace("\"smsCount\": 1", "\"smsCount\": " + smsCount);
+    }
+
+    /** REGRESSION: durationSec=60 with smsCount=3 is billed as ONE unit — smsCount is not a multipart count. */
+    @Test
+    void durationSec_60_with_smsCount_3_bills_exactly_one_unit() {
+        var run = Bill(SmsTestData.Plan501ForA(), FromJson(Record(60, "3")));
+        assertEquals(1, run.Result().Rated().size(), "accepted and rated");
+        cdr c = run.Cdr();
+        acc_chargeable ch = run.Chargeable();
+        assertAmount("60", c.DurationSec);
+        assertAmount("60", c.Duration1);
+        assertAmount("60", ch.Quantity, "billing quantity = durationSec, never smsCount");
+        assertAmount("0.20", ch.unitPriceOrCharge);
+        assertAmount("0.20", ch.BilledAmount, "1 unit x rate");
+        assertAmount("0.20", c.InPartnerCost);
+        assertAmount("-0.20", new BigDecimal(run.Transaction().get("amount")));
+        assertAmount("-0.20", new BigDecimal(InsertRow(run.Sql().StartingWith("insert into account (").get(0)).get("balanceAfter")));
+        var day = new com.telcobright.billing.mediation.summary.CdrSummaryContext(null, new CountingAutoIncrementManager(1))
+                .GenerateSummary(c, run.Result().Rated().get(0).Customer())
+                .get(com.telcobright.billing.mediation.engine.models.CdrSummaryType.sum_voice_day_01);
+        assertEquals(1, day.totalcalls);
+        assertAmount("60", day.actualduration);
+        assertAmount("60", day.duration1);
+        assertAmount("0.20", day.customercost);
+    }
+
+    /** Every billing output is identical whatever smsCount says (absent, 0, 1, 3, malformed): 120 s = 2 units. */
+    @Test
+    void smsCount_never_changes_any_billing_output() {
+        String baseline = Fingerprint(Bill(SmsTestData.Plan501ForA(), FromJson(Record(120, null))));
+        assertTrue(baseline.contains("BilledAmount=0.4|"), baseline);
+        for (String smsCount : new String[] {"0", "1", "3", "\"two\""}) {
+            String actual = Fingerprint(Bill(SmsTestData.Plan501ForA(), FromJson(Record(120, smsCount))));
+            assertEquals(baseline, actual, "smsCount " + smsCount + " changed the bill");
+        }
+    }
+
+    private static String Fingerprint(Run run) {
+        cdr c = run.Cdr();
+        acc_chargeable ch = run.Chargeable();
+        var tx = run.Transaction();
+        var acc = InsertRow(run.Sql().StartingWith("insert into account (").get(0));
+        var day = new com.telcobright.billing.mediation.summary.CdrSummaryContext(null, new CountingAutoIncrementManager(1))
+                .GenerateSummary(c, run.Result().Rated().get(0).Customer())
+                .get(com.telcobright.billing.mediation.engine.models.CdrSummaryType.sum_voice_day_01);
+        return "SG=" + c.ServiceGroup + "|DurationSec=" + N(c.DurationSec) + "|Duration1=" + N(c.Duration1)
+                + "|InPartnerCost=" + N(c.InPartnerCost) + "|CustomerRate=" + N(c.CustomerRate)
+                + "|MatchedPrefixCustomer=" + c.MatchedPrefixCustomer
+                + "|SF=" + ch.servicefamily + "|Quantity=" + N(ch.Quantity) + "|BilledAmount=" + N(ch.BilledAmount)
+                + "|unitPrice=" + N(ch.unitPriceOrCharge) + "|Prefix=" + ch.Prefix + "|RateId=" + ch.RateId
+                + "|rule=" + ch.idBillingrule + "|txAmount=" + N(new BigDecimal(tx.get("amount")))
+                + "|txBefore=" + N(new BigDecimal(tx.get("BalanceBefore"))) + "|txAfter=" + N(new BigDecimal(tx.get("BalanceAfter")))
+                + "|accountAfter=" + N(new BigDecimal(acc.get("balanceAfter")))
+                + "|sumCalls=" + day.totalcalls + "|sumActual=" + N(day.actualduration) + "|sumDuration1=" + N(day.duration1)
+                + "|sumCost=" + N(day.customercost);
+    }
+
+    private static String N(BigDecimal v) {
+        return v == null ? "null" : v.stripTrailingZeros().toPlainString();
+    }
+
+    // ───────────────────────────── billing units = durationSec / 60 ─────────────────────────────
 
     @Test
-    void multipart_on_a_surcharge_plan_charges_parts_times_rate_with_meaningful_quantity() {
-        for (int parts = 1; parts <= 3; parts++) {
-            var run = Bill(SmsTestData.Plan501ForA(), SmsTestData.Sms(MaskSender, Called, PartnerA, 60 * parts, "300" + parts, T));
-            BigDecimal expected = new BigDecimal("0.70").multiply(BigDecimal.valueOf(parts));
-            assertEquals(0, expected.compareTo(run.Chargeable().BilledAmount), "parts=" + parts);
-            assertAmount(Integer.toString(60 * parts), run.Chargeable().Quantity);
-            assertAmount(Integer.toString(60 * parts), run.Cdr().Duration1);
+    void billing_units_on_a_surcharge_plan_charge_units_times_rate_with_meaningful_quantity() {
+        for (int units = 1; units <= 3; units++) {
+            var run = Bill(SmsTestData.Plan501ForA(), SmsTestData.Sms(MaskSender, Called, PartnerA, 60 * units, "300" + units, T));
+            BigDecimal expected = new BigDecimal("0.70").multiply(BigDecimal.valueOf(units));
+            assertEquals(0, expected.compareTo(run.Chargeable().BilledAmount), "units=" + units);
+            assertAmount(Integer.toString(60 * units), run.Chargeable().Quantity);
+            assertAmount(Integer.toString(60 * units), run.Cdr().Duration1);
             assertNull(run.Cdr().RoundedDuration);
             assertAmount(expected.negate().toPlainString(), new BigDecimal(run.Transaction().get("amount")));
         }
     }
 
     @Test
-    void multipart_on_a_plain_plan_charges_parts_times_rate() {
-        for (int parts = 1; parts <= 3; parts++) {
-            var run = Bill(SmsTestData.Plan503ForA(), SmsTestData.Sms(NumericSender, Called, PartnerA, 60 * parts, "400" + parts, T));
-            BigDecimal expected = new BigDecimal("0.50").multiply(BigDecimal.valueOf(parts));
-            assertEquals(0, expected.compareTo(run.Chargeable().BilledAmount), "parts=" + parts);
-            assertAmount(Integer.toString(60 * parts), run.Chargeable().Quantity);
-            assertAmount(Integer.toString(60 * parts), run.Cdr().Duration1);
+    void billing_units_on_a_plain_plan_charge_units_times_rate() {
+        for (int units = 1; units <= 3; units++) {
+            var run = Bill(SmsTestData.Plan503ForA(), SmsTestData.Sms(NumericSender, Called, PartnerA, 60 * units, "400" + units, T));
+            BigDecimal expected = new BigDecimal("0.50").multiply(BigDecimal.valueOf(units));
+            assertEquals(0, expected.compareTo(run.Chargeable().BilledAmount), "units=" + units);
+            assertAmount(Integer.toString(60 * units), run.Chargeable().Quantity);
+            assertAmount(Integer.toString(60 * units), run.Cdr().Duration1);
         }
     }
 

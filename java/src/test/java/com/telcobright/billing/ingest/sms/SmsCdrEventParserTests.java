@@ -61,40 +61,58 @@ class SmsCdrEventParserTests {
     }
 
     @Test
-    void durationSec_is_parsed_not_assumed_and_matching_smsCount_is_accepted() {
-        for (int parts = 1; parts <= 3; parts++) {
-            var p = parser.Parse(WithDurationAndCount(60 * parts, Integer.toString(parts)));
+    void durationSec_from_the_record_is_the_only_billing_duration() {
+        for (int d : new int[] {60, 120, 180}) {
+            var p = parser.Parse(WithDurationAndCount(d, "1"));
             assertTrue(p.Ok(), () -> "dead-lettered: " + p.DeadLetterReason());
-            assertEquals(0, BigDecimal.valueOf(60L * parts).compareTo(p.Cdr().DurationSec));
-            assertEquals(parts, p.SmsCount());
+            assertEquals(0, BigDecimal.valueOf(d).compareTo(p.Cdr().DurationSec), "DurationSec = the record's durationSec");
             assertEquals(1, p.Cdr().ChargingStatus);
         }
-    }
-
-    @Test
-    void smsCount_is_optional() {
-        var p = parser.Parse(WithDurationAndCount(120, null));
-        assertTrue(p.Ok());
-        assertNull(p.SmsCount());
-        assertEquals(0, new BigDecimal("120").compareTo(p.Cdr().DurationSec), "durationSec drives the charge");
         var zero = parser.Parse(WithDurationAndCount(0, null)).Cdr();
         assertEquals(0, zero.ChargingStatus, "0 seconds -> not charged (legacy decoder rule)");
     }
 
+    /** REGRESSION: smsCount (TotalCall / SuccessfulCall) has NO relationship with durationSec. */
     @Test
-    void smsCount_contradicting_durationSec_is_dead_lettered_never_guessed() {
-        var p = parser.Parse(WithDurationAndCount(60, "3"));     // per-part 60 s but 3 parts claimed
-        assertFalse(p.Ok());
-        assertTrue(p.DeadLetterReason().contains("does not match smsCount"), p.DeadLetterReason());
-        assertFalse(parser.Parse(WithDurationAndCount(180, "2")).Ok());
+    void durationSec_60_with_smsCount_3_is_accepted_and_stays_60() {
+        var p = parser.Parse(WithDurationAndCount(60, "3"));
+        assertTrue(p.Ok(), () -> "must not be rejected because the values differ: " + p.DeadLetterReason());
+        assertEquals(0, new BigDecimal("60").compareTo(p.Cdr().DurationSec), "never derived from smsCount");
+        assertEquals(3, p.SmsCount());
+        assertNull(p.Warning());
+
+        var q = parser.Parse(WithDurationAndCount(120, "1"));
+        assertTrue(q.Ok());
+        assertEquals(0, new BigDecimal("120").compareTo(q.Cdr().DurationSec));
     }
 
     @Test
-    void invalid_smsCount_is_dead_lettered() {
-        assertFalse(parser.Parse(WithDurationAndCount(60, "0")).Ok());
-        assertFalse(parser.Parse(WithDurationAndCount(60, "-1")).Ok());
-        assertFalse(parser.Parse(WithDurationAndCount(60, "\"two\"")).Ok());
-        assertTrue(parser.Parse(WithDurationAndCount(60, "\"1\"")).Ok(), "a numeric string is accepted");
+    void smsCount_is_optional_and_may_be_zero() {
+        var absent = parser.Parse(WithDurationAndCount(60, null));
+        assertTrue(absent.Ok());
+        assertNull(absent.SmsCount());
+        var zero = parser.Parse(WithDurationAndCount(60, "0"));
+        assertTrue(zero.Ok());
+        assertEquals(0, zero.SmsCount(), "a call/success count of 0 is a valid value");
+        assertEquals(3, parser.Parse(WithDurationAndCount(60, "\"3\"")).SmsCount(), "a numeric string is accepted");
+    }
+
+    @Test
+    void a_malformed_smsCount_is_ignored_with_a_warning_and_never_blocks_billing() {
+        for (String bad : new String[] {"-1", "1.5", "\"two\"", "{}", "99999999999"}) {
+            var p = parser.Parse(WithDurationAndCount(60, bad));
+            assertTrue(p.Ok(), "smsCount " + bad + " must not dead-letter a billable record");
+            assertNull(p.SmsCount(), "smsCount " + bad);
+            assertTrue(p.Warning() != null && p.Warning().startsWith("smsCount ignored"), "smsCount " + bad);
+            assertEquals(0, new BigDecimal("60").compareTo(p.Cdr().DurationSec));
+        }
+    }
+
+    @Test
+    void a_missing_durationSec_is_never_derived_from_smsCount() {
+        var p = parser.Parse(Json.replace("\"durationSec\": 60,", "").replace("\"smsCount\": 1", "\"smsCount\": 3"));
+        assertFalse(p.Ok(), "no durationSec -> dead-letter, even with smsCount present");
+        assertTrue(p.DeadLetterReason().contains("durationSec"), p.DeadLetterReason());
     }
 
     @Test

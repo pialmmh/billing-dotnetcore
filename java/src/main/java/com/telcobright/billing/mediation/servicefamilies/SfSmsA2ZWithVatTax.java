@@ -17,11 +17,12 @@ import java.math.BigDecimal;
  * registered ONLY in the SMS rater (voice keeps {@link SfA2ZWithVatTax}).
  *
  * <ul>
- * <li><b>Amount</b>: the unchanged legacy A2Z amount over {@code DurationSec}. SMS encodes parts as
- *   {@code DurationSec = parts × 60} on a per-minute ({@code TF_min}) plan, so the amount is
- *   {@code parts × rate} on both the plain and the surcharge-window branch.</li>
+ * <li><b>Amount</b>: the unchanged legacy A2Z amount over {@code DurationSec} — the ONLY billing duration (the
+ *   record's {@code durationSec}; nothing else, e.g. {@code smsCount}, is ever consulted). Billing units are
+ *   {@code DurationSec / 60} on a per-minute ({@code TF_min}) plan, so the amount is {@code units × rate} on both
+ *   the plain and the surcharge-window branch.</li>
  * <li><b>Quantity / Duration1</b>: the rated seconds ({@link A2ZRater#GetRatedDurationSec}) — 60/120/180 for
- *   1/2/3 parts. Legacy left these at 0 for multipart SMS on a surcharge plan (an amount-path quirk); nothing
+ *   1/2/3 units. Legacy left these at 0 above 60 s on a surcharge plan (an amount-path quirk); nothing
  *   downstream consumes the zero (the legacy SMS report divides {@code duration1} by 60), so it is NOT kept.</li>
  * <li><b>RoundedDuration</b>: left NULL — the legacy SMS biller never stamped it, and SMS has no pulse rounding.</li>
  * <li><b>Prefix</b>: the matched raw composite rendered {@code BRAND|8801} on {@code MatchedPrefixCustomer} and

@@ -149,8 +149,13 @@ public final class SmsCdrKafkaConsumer {
         var cdrs = new ArrayList<cdr>(values.size());
         for (String v : values) {
             var parsed = parser.Parse(v);
-            if (parsed.Ok()) cdrs.add(parsed.Cdr());
-            else log.warnf("sms dead-letter [%s]: %s", parsed.DeadLetterReason(), Truncate(v));
+            if (parsed.Ok()) {
+                if (parsed.Warning() != null)      // an ignored field (e.g. malformed smsCount): billed anyway
+                    log.warnf("sms idCall=%s: %s", parsed.Cdr().UniqueBillId, parsed.Warning());
+                cdrs.add(parsed.Cdr());
+            } else {
+                log.warnf("sms dead-letter [%s]: %s", parsed.DeadLetterReason(), Truncate(v));
+            }
         }
         if (cdrs.isEmpty()) return 0;
         CdrProcessingResult r = processor.ProcessSmsOutgoingBatch(tenant, cdrs);
