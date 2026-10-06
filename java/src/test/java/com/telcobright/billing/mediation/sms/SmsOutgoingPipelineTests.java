@@ -347,7 +347,7 @@ class SmsOutgoingPipelineTests {
         assertAmount("-0.50", new BigDecimal(txs.get(1).get("BalanceBefore")));
         assertAmount("-1.00", new BigDecimal(txs.get(1).get("BalanceAfter")));
         assertAmount("-1.00", new BigDecimal(txs.get(2).get("BalanceBefore")));
-        assertAmount("-2.00", new BigDecimal(txs.get(2).get("BalanceAfter")), "the 2-part SMS debits 1.00");
+        assertAmount("-2.00", new BigDecimal(txs.get(2).get("BalanceAfter")), "120 s = 2 billing units debits 1.00");
         var ledger = InsertRows(run.Sql().StartingWith("insert into acc_ledger_summary").get(0));
         assertEquals(1, ledger.size(), "same account, same day -> one ledger row");
         assertAmount("-2.00", new BigDecimal(ledger.get(0).get("AMOUNT")));
