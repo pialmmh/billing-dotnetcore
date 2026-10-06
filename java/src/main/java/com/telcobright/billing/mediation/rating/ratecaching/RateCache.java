@@ -118,6 +118,16 @@ public class RateCache {
         GetRateDictsByDay(DayRange(today.plusDays(1)));
     }
 
+    /** True when the day is already cached — checking costs no load and no fetch. */
+    public boolean IsDayLoaded(LocalDate d) {
+        return this.DateRangeWiseRateDic.containsKey(DayRange(d));
+    }
+
+    /** Ensure one day is loaded — the same blocking lazy load the rating path does (RateCacheGuard, per day). */
+    public void EnsureDay(LocalDate d) {
+        GetRateDictsByDay(DayRange(d));
+    }
+
     /** The RateCache day key for a calendar date: [d 00:00, d+1 00:00) — matches BasicCharge.MatchRate. */
     public static DateRange DayRange(LocalDate d) {
         return new DateRange(d.atStartOfDay(), d.atStartOfDay().plusDays(1));
