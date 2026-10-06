@@ -70,6 +70,29 @@ public final class MySqlCdrBatchRunner {
         return RunInternal(conn, mediation, partners, cdrs, ids, segmentSize, null, legacyDedup);
     }
 
+    /**
+     * The OUTGOING-SMS batch (Phase 1): same single transaction + per-schema lock as voice, but
+     * <ul>
+     * <li>the pipeline is {@link CdrPipeline#SmsOutgoing}, built for THIS batch over THIS connection (the tenant's
+     *   billing-rule catalog is read inside the tx; account/ledger rows are locked through it);</li>
+     * <li>ids MUST come from the shared counter ({@code ids} non-null — see {@link SmsIdAllocators#For});</li>
+     * <li>dedup is {@link #FilterSmsSeen}: a redelivered SMS (its UniqueBillId already in cdr OR cdrerror) and, with
+     *   {@code legacyDedup}, an SMS legacy already owns (its SequenceNumber in cdr OR cdrerror) are dropped.</li>
+     * </ul>
+     */
+    public CdrBatchResult RunSmsOutgoing(Connection conn, MediationContext mediation,
+            Map<Integer, Partner> partners, List<cdr> cdrs, IAutoIncrementManager ids, int segmentSize,
+            boolean legacyDedup, java.util.function.Supplier<java.time.LocalDateTime> clock) {
+        if (ids == null)
+            throw new IllegalArgumentException("the SMS batch needs the counter-backed id source (SmsIdAllocators.For)");
+        return RunCore(conn, mediation, partners, cdrs, ids, segmentSize, null, false,
+                c -> {
+                    var accounting = new MySqlSmsAccountingStore(c);
+                    return CdrPipeline.SmsOutgoing(accounting.LoadBillingRuleCatalog(), accounting, clock);
+                },
+                c -> FilterSmsSeen(c, cdrs, legacyDedup));
+    }
+
     /** An action run INSIDE the batch transaction (under the tenant lock), before the pipeline. */
     @FunctionalInterface
     private interface InTxAction { void run(Connection conn) throws SQLException; }
@@ -100,6 +123,21 @@ public final class MySqlCdrBatchRunner {
     private CdrBatchResult RunInternal(Connection conn, MediationContext mediation,
             Map<Integer, Partner> partners, List<cdr> cdrs,
             IAutoIncrementManager ids, int segmentSize, InTxAction preProcess, boolean legacyDedup) {
+        return RunCore(conn, mediation, partners, cdrs, ids, segmentSize, preProcess, legacyDedup, c -> _processor, null);
+    }
+
+    /** Builds the batch's pipeline over the batch connection (voice: the shared instance). */
+    @FunctionalInterface
+    private interface PipelineFactory { CdrPipeline For(Connection conn) throws SQLException; }
+
+    /** A batch-specific dedup that REPLACES the voice filters (SMS); null = the voice filters, unchanged. */
+    @FunctionalInterface
+    private interface DedupFilter { List<cdr> Keep(Connection conn) throws SQLException; }
+
+    private CdrBatchResult RunCore(Connection conn, MediationContext mediation,
+            Map<Integer, Partner> partners, List<cdr> cdrs,
+            IAutoIncrementManager ids, int segmentSize, InTxAction preProcess, boolean legacyDedup,
+            PipelineFactory pipelineFactory, DedupFilter dedupOverride) {
         try {
             conn.setAutoCommit(false);   // conn.BeginTransaction()
         } catch (SQLException e) {
@@ -124,27 +162,36 @@ public final class MySqlCdrBatchRunner {
             // is dropped — legacy cdr = billed, legacy cdrerror = failed-and-NOT-recovered; either way NEW
             // billing must not touch it. Only seqs in NEITHER table proceed. Batched (one query per table) and
             // FAIL-SAFE (a lookup SQLException propagates → whole batch rolls back / retries → never a silent bill).
-            List<cdr> afterLegacy = cdrs;
-            if (legacyDedup) {
-                afterLegacy = FilterLegacyOwned(cdrs, seqs -> jdbcOwnedSeqs(conn, seqs));
-                int skippedLegacy = cdrs.size() - afterLegacy.size();
-                if (skippedLegacy > 0)
-                    log.infof("cutover legacy-dedup: skipped %d cdr(s) owned by legacy (seq in cdr/cdrerror) in %s",
-                            skippedLegacy, batchLock);
+            List<cdr> toProcess;
+            if (dedupOverride != null) {
+                // SMS: its own combined redelivery + legacy-ownership filter (see FilterSmsSeen).
+                toProcess = dedupOverride.Keep(conn);
+                int skipped = cdrs.size() - toProcess.size();
+                if (skipped > 0)
+                    log.infof("sms dedup: skipped %d already-seen sms cdr(s) in %s", skipped, batchLock);
+            } else {
+                List<cdr> afterLegacy = cdrs;
+                if (legacyDedup) {
+                    afterLegacy = FilterLegacyOwned(cdrs, seqs -> jdbcOwnedSeqs(conn, seqs));
+                    int skippedLegacy = cdrs.size() - afterLegacy.size();
+                    if (skippedLegacy > 0)
+                        log.infof("cutover legacy-dedup: skipped %d cdr(s) owned by legacy (seq in cdr/cdrerror) in %s",
+                                skippedLegacy, batchLock);
+                }
+                // Cross-batch idempotency (T3): under the per-schema lock (so this SELECT sees the true committed
+                // state and no concurrent batch can write between the check and our insert), drop any cdr whose
+                // UniqueBillId is ALREADY billed in this schema's cdr table. A redelivered Kafka poll-batch (offsets
+                // commit only after the DB commit — at-least-once) therefore cannot double-write / double-bill.
+                // The unique index on cdr(UniqueBillId) is the hard backstop if two processes ever race past this.
+                toProcess = FilterAlreadyBilled(conn, afterLegacy);
+                int skipped = cdrs.size() - toProcess.size();
+                if (skipped > 0)
+                    log.infof("idempotency: skipped %d already-billed cdr(s) in %s (redelivery)", skipped, batchLock);
             }
-            // Cross-batch idempotency (T3): under the per-schema lock (so this SELECT sees the true committed
-            // state and no concurrent batch can write between the check and our insert), drop any cdr whose
-            // UniqueBillId is ALREADY billed in this schema's cdr table. A redelivered Kafka poll-batch (offsets
-            // commit only after the DB commit — at-least-once) therefore cannot double-write / double-bill.
-            // The unique index on cdr(UniqueBillId) is the hard backstop if two processes ever race past this.
-            List<cdr> toProcess = FilterAlreadyBilled(conn, afterLegacy);
-            int skipped = cdrs.size() - toProcess.size();
-            if (skipped > 0)
-                log.infof("idempotency: skipped %d already-billed cdr(s) in %s (redelivery)", skipped, batchLock);
             // the pipeline writes EVERYTHING through this connection-bound store — one connection, one transaction.
             var store = new MySqlExecutor(conn);
             var batch = new CdrBatch(mediation, partners, toProcess, store, ids, segmentSize);
-            var result = _processor.Process(batch);
+            var result = pipelineFactory.For(conn).Process(batch);
             conn.commit();        // the ONE commit for the batch
             return result;
         } catch (Throwable t) {
@@ -218,6 +265,113 @@ public final class MySqlCdrBatchRunner {
                 for (int j = 0; j < slice.size(); j++) ps.setLong(j + 1, slice.get(j));
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) into.add(rs.getLong(1));
+                }
+            }
+        }
+    }
+
+    // ─────────────────────────────── OUTGOING SMS dedup ───────────────────────────────────────────────
+
+    /** What the SMS dedup found already present: UniqueBillIds and SequenceNumbers (in cdr or cdrerror). */
+    record SmsSeen(java.util.Set<String> BillIds, java.util.Set<Long> Seqs) {}
+
+    /** SMS dedup lookup seam (production: {@link #jdbcSmsSeen}); a throw aborts the batch — never a silent bill. */
+    @FunctionalInterface
+    interface SmsSeenLookup {
+        SmsSeen Seen(java.util.Set<String> billIds, java.util.Set<Long> seqs, boolean checkSeqs,
+                java.time.LocalDateTime from, java.time.LocalDateTime to) throws SQLException;
+    }
+
+    /**
+     * The SMS batch filter (replaces the voice filters for this path). Keeps an SMS only when NONE holds:
+     * <ol>
+     * <li>its {@code UniqueBillId} (= Kafka {@code idCall}) appeared EARLIER IN THIS BATCH — a duplicate record in
+     *   one poll must not abort the whole batch (the pipeline's in-batch uniqueness assertion would) and replay
+     *   it forever;</li>
+     * <li>its {@code UniqueBillId} is already in {@code cdr} OR {@code cdrerror} — a Kafka redelivery of an SMS
+     *   this path already billed OR already rejected writes nothing again (no second charge, transaction, debit,
+     *   ledger amount, summary or error row);</li>
+     * <li>with {@code legacyDedup}: its {@code SequenceNumber} (= {@code idCall}; legacy stores idCall there) is
+     *   already in {@code cdr} OR {@code cdrerror} — an SMS legacy billed or rejected is never billed again.</li>
+     * </ol>
+     * Both tables are partitioned on StartTime, so the lookups are bounded to [min StartTime − 1 day,
+     * max StartTime + 1 day) — a redelivered/legacy row of the same SMS carries the same StartTime.
+     */
+    static List<cdr> FilterSmsSeen(Connection conn, List<cdr> cdrs, boolean legacyDedup) throws SQLException {
+        return FilterSmsSeen(cdrs, legacyDedup, (b, s, check, from, to) -> jdbcSmsSeen(conn, b, s, check, from, to));
+    }
+
+    static List<cdr> FilterSmsSeen(List<cdr> cdrs, boolean legacyDedup, SmsSeenLookup lookup) throws SQLException {
+        var unique = new ArrayList<cdr>(cdrs.size());
+        var inBatch = new HashSet<String>();
+        for (cdr c : cdrs) {
+            if (c.UniqueBillId == null || c.UniqueBillId.isEmpty())
+                throw new IllegalStateException("SMS cdr without UniqueBillId (idCall) reached the batch");
+            if (inBatch.add(c.UniqueBillId)) unique.add(c);
+        }
+        if (unique.isEmpty()) return unique;
+
+        var billIds = new LinkedHashSet<String>();
+        var seqs = new LinkedHashSet<Long>();
+        java.time.LocalDateTime min = null, max = null;
+        for (cdr c : unique) {
+            billIds.add(c.UniqueBillId);
+            if (c.SequenceNumber > 0) seqs.add(c.SequenceNumber);
+            if (c.StartTime != null) {
+                if (min == null || c.StartTime.isBefore(min)) min = c.StartTime;
+                if (max == null || c.StartTime.isAfter(max)) max = c.StartTime;
+            }
+        }
+        java.time.LocalDateTime from = min != null ? min.minusDays(1) : null;
+        java.time.LocalDateTime to = max != null ? max.plusDays(1) : null;
+        SmsSeen seen = lookup.Seen(billIds, seqs, legacyDedup, from, to);
+
+        var kept = new ArrayList<cdr>(unique.size());
+        for (cdr c : unique) {
+            if (seen.BillIds().contains(c.UniqueBillId)) continue;
+            if (legacyDedup && c.SequenceNumber > 0 && seen.Seqs().contains(c.SequenceNumber)) continue;
+            kept.add(c);
+        }
+        return kept;
+    }
+
+    /** Production SMS lookup: UniqueBillId (and, when asked, SequenceNumber) IN-checks on cdr + cdrerror. */
+    static SmsSeen jdbcSmsSeen(Connection conn, java.util.Set<String> billIds, java.util.Set<Long> seqs,
+            boolean checkSeqs, java.time.LocalDateTime from, java.time.LocalDateTime to) throws SQLException {
+        var foundBills = new HashSet<String>();
+        var foundSeqs = new HashSet<Long>();
+        for (String table : List.of("cdr", "cdrerror")) {
+            SelectWindowed(conn, table, "UniqueBillId", new ArrayList<>(billIds), from, to,
+                    (ps, i, v) -> ps.setString(i, (String) v), rs -> foundBills.add(rs.getString(1)));
+            if (checkSeqs && !seqs.isEmpty())
+                SelectWindowed(conn, table, "SequenceNumber", new ArrayList<>(seqs), from, to,
+                        (ps, i, v) -> ps.setLong(i, (Long) v), rs -> foundSeqs.add(rs.getLong(1)));
+        }
+        return new SmsSeen(foundBills, foundSeqs);
+    }
+
+    @FunctionalInterface private interface Binder { void bind(PreparedStatement ps, int index, Object value) throws SQLException; }
+    @FunctionalInterface private interface RowSink { void take(ResultSet rs) throws SQLException; }
+
+    private static void SelectWindowed(Connection conn, String table, String column, List<?> values,
+            java.time.LocalDateTime from, java.time.LocalDateTime to, Binder binder, RowSink sink) throws SQLException {
+        final int chunk = 500;
+        for (int i = 0; i < values.size(); i += chunk) {
+            var slice = values.subList(i, Math.min(i + chunk, values.size()));
+            var sql = new StringBuilder("select ").append(column).append(" from ").append(table).append(" where ");
+            if (from != null && to != null) sql.append("StartTime >= ? and StartTime < ? and ");
+            sql.append(column).append(" in (");
+            for (int j = 0; j < slice.size(); j++) sql.append(j == 0 ? "?" : ",?");
+            sql.append(")");
+            try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+                int p = 1;
+                if (from != null && to != null) {
+                    ps.setTimestamp(p++, java.sql.Timestamp.valueOf(from));
+                    ps.setTimestamp(p++, java.sql.Timestamp.valueOf(to));
+                }
+                for (Object v : slice) binder.bind(ps, p++, v);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) sink.take(rs);
                 }
             }
         }

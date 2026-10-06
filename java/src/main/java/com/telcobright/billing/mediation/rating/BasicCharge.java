@@ -11,7 +11,11 @@ import com.telcobright.billing.mediation.model.AssignmentDirection;
 import com.telcobright.billing.mediation.model.Partner;
 import com.telcobright.billing.mediation.rating.ratecaching.DateRange;
 import com.telcobright.billing.mediation.rating.ratecaching.PrefixMatcher;
+import com.telcobright.billing.mediation.rating.ratecaching.SmsCompositePrefixMatcher;
 import com.telcobright.billing.mediation.rating.ratecaching.TupleByPeriod;
+import com.telcobright.billing.mediation.servicefamilies.SfSmsA2ZWithVatTax;
+import com.telcobright.billing.mediation.sms.SmsBillingRuleCatalog;
+import com.telcobright.billing.mediation.sms.SmsOutgoing;
 import com.telcobright.billing.mediation.servicefamilies.IServiceFamily;
 import com.telcobright.billing.mediation.servicefamilies.SfA2Z;
 import com.telcobright.billing.mediation.servicefamilies.SfA2ZWithVatTax;
@@ -39,20 +43,38 @@ import java.util.stream.Collectors;
 public final class BasicCharge {
     private final ServiceGroupDetection _detection;
     private final Map<Integer, IServiceFamily> _families;
+    /** Non-null ONLY on the outgoing-SMS rater ({@link #SmsOutgoing}); null = the voice rater, unchanged. */
+    private final SmsBillingRuleCatalog _smsCatalog;
 
     public BasicCharge(ServiceGroupDetection detection) {
         this(detection, null);
     }
 
     public BasicCharge(ServiceGroupDetection detection, List<IServiceFamily> families) {
+        this(detection, families, null);
+    }
+
+    private BasicCharge(ServiceGroupDetection detection, List<IServiceFamily> families,
+            SmsBillingRuleCatalog smsCatalog) {
         _detection = detection;
         var source = families != null ? families : DefaultFamilies();
         _families = source.stream().collect(Collectors.toMap(f -> f.Id(), f -> f));
+        _smsCatalog = smsCatalog;
     }
 
     /** The SG10+SG11 detection pair + the built-in service families — the ready instance. */
     public static BasicCharge Default() {
         return new BasicCharge(ServiceGroupDetection.Default());
+    }
+
+    /**
+     * The OUTGOING-SMS rater: fixed SG20 ({@link ServiceGroupDetection#SmsOutgoing()} — no voice detector), the
+     * SMS SF10 family only, and the calling+called composite matcher. {@code catalog} is the tenant's billing-rule
+     * wiring (the legacy SG gate + the rule each chargeable carries).
+     */
+    public static BasicCharge SmsOutgoing(SmsBillingRuleCatalog catalog) {
+        if (catalog == null) throw new IllegalArgumentException("the SMS rater needs the tenant's billing-rule catalog");
+        return new BasicCharge(ServiceGroupDetection.SmsOutgoing(), List.of(new SfSmsA2ZWithVatTax()), catalog);
     }
 
     // The legacy MEF service-family container, as a fixed registry: SF1 (base A2Z), SF10 (A2Z+VAT), SF11,
@@ -85,6 +107,7 @@ public final class BasicCharge {
      * disabled/unconfigured, or no rule produced a charge.
      */
     public List<acc_chargeable> Rate(cdr cdr, MediationContext mediation, Map<Integer, Partner> partners) {
+        if (_smsCatalog != null) return RateSmsOutgoing(cdr, mediation, partners);
         var match = _detection.Detect(cdr, partners);
         if (match == null) return List.of();
         cdr.ServiceGroup = match.ServiceGroupId();   // stamp the detected SG (legacy serviceGroup.Execute)
@@ -128,6 +151,7 @@ public final class BasicCharge {
      */
     public acc_chargeable Compute(cdr cdr, AssignmentDirection direction, MediationContext mediation,
             Map<Integer, Partner> partners) {
+        RejectOnSmsRater("Compute");
         var match = _detection.Detect(cdr, partners);
         if (match == null) return null;
         ServiceGroupConfiguration sgConfig = mediation.ServiceGroupConfigurations.get(match.ServiceGroupId());
@@ -146,6 +170,7 @@ public final class BasicCharge {
      * detected) and the matched {@link Rateext} (null if no SG / no rate).
      */
     public MatchCustomerRateResult MatchCustomerRate(cdr cdr, MediationContext mediation, Map<Integer, Partner> partners) {
+        RejectOnSmsRater("MatchCustomerRate");
         var match = _detection.Detect(cdr, partners);
         if (match == null) return new MatchCustomerRateResult(0, null);
         cdr.ServiceGroup = match.ServiceGroupId();
@@ -300,6 +325,83 @@ public final class BasicCharge {
                 })
                 .collect(Collectors.toList());
         return new PrefixMatcher(mediation.RateCache, phoneNumber, category, subCategory, tups, answerTime).MatchPrefix();
+    }
+
+    // ─────────────────────────────── OUTGOING SMS (SG20) ───────────────────────────────────────────────
+    // Reached ONLY through BasicCharge.SmsOutgoing(); the voice rater above never enters these methods.
+
+    /**
+     * Legacy SG20 ExecuteRating for one SMS: the fixed SG20 rule (SF10, customer), the calling+called composite
+     * match, and the billing rule the matched tuple carries (legacy threw "Billing rule not found" when absent —
+     * thrown here too, so the SMS lands in cdrerror instead of being billed without an accounting rule).
+     */
+    private List<acc_chargeable> RateSmsOutgoing(cdr cdr, MediationContext mediation, Map<Integer, Partner> partners) {
+        var match = _detection.Detect(cdr, partners);           // always SG20 (the SMS detection set)
+        cdr.ServiceGroup = match.ServiceGroupId();
+
+        var chargeables = new ArrayList<acc_chargeable>();
+        for (RatingRule rule : SmsOutgoing.Configuration.Rules().stream()
+                .filter(r -> r instanceof RatingRule).map(r -> (RatingRule) r).collect(Collectors.toList())) {
+            var family = _families.get(rule.IdServiceFamily());
+            if (family == null) continue;
+            Rateext rate = MatchSmsCompositeRate(cdr, mediation, rule);
+            if (rate == null) continue;
+
+            SmsBillingRuleCatalog.Assignment assignment = _smsCatalog.AssignmentFor(rate.IdRatePlanAssignmentTuple);
+            if (assignment == null || _smsCatalog.Rule(assignment.IdBillingRule()) == null)
+                throw new IllegalStateException("Billing rule not found for rate-plan-assignment tuple "
+                        + rate.IdRatePlanAssignmentTuple);
+
+            acc_chargeable c = family.Charge(rate, cdr, match.ServiceGroupId(),
+                    directionFromValue(rule.AssignDirection()), mediation);
+            if (c == null) continue;
+            c.idBillingrule = assignment.IdBillingRule();
+            chargeables.add(c);
+        }
+        return chargeables;
+    }
+
+    /**
+     * Resolve the SG20 tuples and composite-match the SMS. Tuples are keyed by the rule's SERVICE FAMILY (legacy
+     * {@code idService = ServiceContext.ServiceFamily.Id}; the SMS schema's SG20 customer tuples are idService=10), and only
+     * tuples whose billing-rule assignment belongs to SG20 are eligible (legacy {@code ServiceGroupWiseTupDefs}).
+     * Partner scope first; if none of the partner's tuples is SG20-eligible, the service-wide scope.
+     * Numbers are the RAW originating calling (sender/mask) and called numbers — no normalisation.
+     */
+    private Rateext MatchSmsCompositeRate(cdr cdr, MediationContext mediation, RatingRule rule) {
+        String calling = cdr.OriginatingCallingNumber;
+        String called = cdr.OriginatingCalledNumber;
+        if ((calling == null || calling.isEmpty()) && (called == null || called.isEmpty())) return null;
+
+        java.util.function.IntPredicate sg20Tuple =
+                tupleId -> _smsCatalog.IsAssignedTo(tupleId, SmsOutgoing.ServiceGroupId);
+        var tuples = mediation.RatePlanResolver.Resolve(rule.IdServiceFamily(), rule.AssignDirection(), cdr.InPartnerId, null)
+                .stream().filter(t -> sg20Tuple.test(t.id)).collect(Collectors.toList());
+        if (tuples.isEmpty())
+            tuples = mediation.RatePlanResolver.Resolve(rule.IdServiceFamily(), rule.AssignDirection(), null, null)
+                    .stream().filter(t -> sg20Tuple.test(t.id)).collect(Collectors.toList());
+        if (tuples.isEmpty()) return null;
+
+        int category = (cdr.Category != null && cdr.Category > 0) ? cdr.Category : 1;
+        int subCategory = (cdr.SubCategory != null && cdr.SubCategory > 0) ? cdr.SubCategory : 1;
+        LocalDateTime answerTime = cdr.AnswerTime != null ? cdr.AnswerTime : cdr.StartTime;
+        var day = new DateRange(answerTime.toLocalDate().atStartOfDay(), answerTime.toLocalDate().atStartOfDay().plusDays(1));
+        var tups = tuples.stream()
+                .map(t -> {
+                    TupleByPeriod tp = new TupleByPeriod();
+                    tp.IdAssignmentTuple = t.id;
+                    tp.DRange = day;
+                    tp.Priority = t.priority;
+                    return tp;
+                })
+                .collect(Collectors.toList());
+        return new SmsCompositePrefixMatcher(mediation.RateCache, calling, called, category, subCategory, tups,
+                answerTime, sg20Tuple).Match();
+    }
+
+    private void RejectOnSmsRater(String operation) {
+        if (_smsCatalog != null)
+            throw new UnsupportedOperationException(operation + " is a voice operation; the outgoing-SMS rater only Rate()s");
     }
 
     // C# `(AssignmentDirection)intValue` — map the legacy int direction back to the enum by its value.

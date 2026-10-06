@@ -35,6 +35,14 @@ public final class ServiceGroupDetection {
         return new ServiceGroupDetection(List.of(new SgIntlOutIptsp(), new SgDomOffnetOut(), new SgDomOffnetIn()));
     }
 
+    /**
+     * The OUTGOING-SMS detection set: SG20 ONLY. The voice detectors (SG10/SG11/SG15) are not in it, so an SMS can
+     * never be classified as voice — even though its in-partner type (3) is one SG10 would claim.
+     */
+    public static ServiceGroupDetection SmsOutgoing() {
+        return new ServiceGroupDetection(List.of(new SgDomSmsOffnetOut()));
+    }
+
     public ServiceGroupMatch Detect(cdr cdr, Map<Integer, Partner> partners) {
         cdr.ServiceGroup = 0;   // unset first, as the legacy loop did before each Execute
         for (var detector : _detectors) {

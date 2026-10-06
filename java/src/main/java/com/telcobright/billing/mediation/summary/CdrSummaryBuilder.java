@@ -6,9 +6,11 @@ import java.time.LocalDateTime;
 import com.telcobright.billing.mediation.engine.models.AbstractCdrSummary;
 import com.telcobright.billing.mediation.engine.models.acc_chargeable;
 import com.telcobright.billing.mediation.engine.models.cdr;
+import com.telcobright.billing.mediation.engine.models.sum_voice_day_01;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_02;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_03;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_05;
+import com.telcobright.billing.mediation.engine.models.sum_voice_hr_01;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_02;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_03;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_05;
@@ -53,6 +55,9 @@ public final class CdrSummaryBuilder {
         // sum_voice_hr_05; the stale legacy source said _02, the live data is _05).
         if (serviceGroup == 15 && bucket == SummaryBucket.Day) return new sum_voice_day_05();
         if (serviceGroup == 15 && bucket == SummaryBucket.Hour) return new sum_voice_hr_05();
+        // SG20 domestic outgoing SMS → sum_voice_*_01 (legacy SgDomSmsOffnetOut.GetSummaryTargetTables).
+        if (serviceGroup == 20 && bucket == SummaryBucket.Day) return new sum_voice_day_01();
+        if (serviceGroup == 20 && bucket == SummaryBucket.Hour) return new sum_voice_hr_01();
         throw new UnsupportedOperationException("No summary table mapped for service group " + serviceGroup + ".");
     }
 
@@ -86,7 +91,11 @@ public final class CdrSummaryBuilder {
     private static void PopulateServiceGroup(AbstractCdrSummary s, cdr cdr, acc_chargeable chargeable) {
         s.tup_countryorareacode = cdr.CountryCode;
 
-        if (chargeable.servicegroup == 10) {   // SgDomOffnetOut.SetServiceGroupWiseSummaryParams (customer leg)
+        // SG20 (outgoing SMS): legacy SgDomSmsOffnetOut.SetServiceGroupWiseSummaryParams sets EXACTLY the SG10 field
+        // set (destinationId, matched prefixes, customer leg off the chargeable, supplier cost/rate, tax1/tax2,
+        // vat = ZAmount, anscost = CostAnsIn) plus intAmount1/2 and longAmount1/2 = 0, which ReplaceNullsWithDefault
+        // already guarantees. The matched customer prefix is the chargeable's display form (BRAND|8801).
+        if (chargeable.servicegroup == 10 || chargeable.servicegroup == 20) {   // SgDomOffnetOut / SgDomSmsOffnetOut (customer leg)
             s.tup_destinationId = cdr.AnsIdTerm != null ? cdr.AnsIdTerm.toString() : null;
             s.tup_matchedprefixsupplier = cdr.MatchedPrefixSupplier;
             // SgIntlTransitVoice.SetChargingSummaryInCustomerDirection:

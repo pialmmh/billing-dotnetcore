@@ -2,9 +2,11 @@ package com.telcobright.billing.data;
 
 import com.telcobright.billing.mediation.engine.models.AbstractCdrSummary;
 import com.telcobright.billing.mediation.engine.models.CdrSummaryType;
+import com.telcobright.billing.mediation.engine.models.sum_voice_day_01;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_02;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_03;
 import com.telcobright.billing.mediation.engine.models.sum_voice_day_05;
+import com.telcobright.billing.mediation.engine.models.sum_voice_hr_01;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_02;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_03;
 import com.telcobright.billing.mediation.engine.models.sum_voice_hr_05;
@@ -69,9 +71,11 @@ public final class MySqlSummaryStore implements ISummaryStore {
     /** One entity instance per summary table. Package-visible so a unit test can pin EVERY enum value. */
     static AbstractCdrSummary NewEntity(CdrSummaryType table) {
         return switch (table) {
+            case sum_voice_day_01 -> new sum_voice_day_01();   // SG20 outgoing SMS
             case sum_voice_day_02 -> new sum_voice_day_02();
             case sum_voice_day_03 -> new sum_voice_day_03();
             case sum_voice_day_05 -> new sum_voice_day_05();
+            case sum_voice_hr_01 -> new sum_voice_hr_01();     // SG20 outgoing SMS
             case sum_voice_hr_02 -> new sum_voice_hr_02();
             case sum_voice_hr_03 -> new sum_voice_hr_03();
             case sum_voice_hr_05 -> new sum_voice_hr_05();

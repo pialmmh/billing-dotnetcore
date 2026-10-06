@@ -114,6 +114,12 @@ public final class ProfileConfigReader {
         return yaml == null ? new MediationOptions() : ReadMediationFromYaml(yaml);
     }
 
+    /** Reads the active profile's billing.mediation.sms-outgoing block (the outgoing-SMS Kafka intake). */
+    public static SmsOutgoingOptions ReadSmsOutgoing(TenantSelection selection) {
+        String yaml = loadActiveProfileYaml(selection);
+        return yaml == null ? new SmsOutgoingOptions() : ReadSmsOutgoingFromYaml(yaml);
+    }
+
     // ── YAML parsers (package-private, deterministic — unit-tested directly with inline YAML) ────
 
     static TenantConfigSyncOptions ReadOptionsFromYaml(String yaml) {
@@ -225,6 +231,25 @@ public final class ProfileConfigReader {
         return options;
     }
 
+    static SmsOutgoingOptions ReadSmsOutgoingFromYaml(String yaml) {
+        SmsOutgoingOptions options = new SmsOutgoingOptions();
+        BillingYaml billing = billingOf(yaml);
+        SmsOutgoingYaml y = billing != null && billing.Mediation != null ? billing.Mediation.SmsOutgoing : null;
+        if (y == null) return options;
+        options.Enabled = y.Enabled;
+        options.Tenant = y.Tenant != null ? y.Tenant.trim() : "";
+        options.Topic = y.Topic != null ? y.Topic.trim() : "";
+        options.Group = y.Group != null ? y.Group.trim() : "";
+        String servers = y.BootstrapServers != null && !y.BootstrapServers.isBlank() ? y.BootstrapServers
+                : (billing.CdrIngest != null && billing.CdrIngest.BootstrapServers != null ? billing.CdrIngest.BootstrapServers : "");
+        options.BootstrapServers = servers.trim();
+        if (y.PollMs > 0) options.PollMs = y.PollMs;
+        if (y.LegacyDedupEnabled != null) options.LegacyDedupEnabled = y.LegacyDedupEnabled;
+        if (y.IdBlockSize > 0) options.IdBlockSize = y.IdBlockSize;
+        if (y.AutoOffsetReset != null && !y.AutoOffsetReset.isBlank()) options.AutoOffsetReset = y.AutoOffsetReset.trim();
+        return options;
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────
 
     /** Resolve the active (first enabled) tenant's profile YAML text: external override dir first, then the
@@ -293,6 +318,19 @@ public final class ProfileConfigReader {
 
     static final class MediationYaml {
         public int SwitchId;
+        public SmsOutgoingYaml SmsOutgoing;
+    }
+
+    static final class SmsOutgoingYaml {
+        public boolean Enabled;
+        public String Tenant;
+        public String Topic;
+        public String Group;
+        public String BootstrapServers;
+        public int PollMs;
+        public Boolean LegacyDedupEnabled;   // absent -> the SMS default (true)
+        public int IdBlockSize;
+        public String AutoOffsetReset;
     }
 
     static final class CdrIngestYaml {

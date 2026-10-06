@@ -5,11 +5,16 @@ import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.mediation.rating.BasicCharge;
 import com.telcobright.billing.mediation.sql.CountingAutoIncrementManager;
 import com.telcobright.billing.mediation.sql.IAutoIncrementManager;
+import com.telcobright.billing.mediation.sms.ISmsAccountingStore;
+import com.telcobright.billing.mediation.sms.SmsBillingRuleCatalog;
+import com.telcobright.billing.mediation.sms.SmsOutgoingStage;
 import com.telcobright.billing.mediation.validation.MediationValidator;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * The decoupled CDR PROCESSING pipeline — the port of legacy {@code CdrProcessor}'s
@@ -42,11 +47,37 @@ import java.util.List;
  */
 public final class CdrPipeline {
     private final BasicCharge _basicCharge;
+    /** Non-null ONLY on the outgoing-SMS pipeline ({@link #SmsOutgoing}); null = the voice pipeline, unchanged. */
+    private final SmsOutgoingStage _sms;
 
-    public CdrPipeline(BasicCharge basicCharge) { _basicCharge = basicCharge; }
+    public CdrPipeline(BasicCharge basicCharge) { this(basicCharge, null); }
+
+    private CdrPipeline(BasicCharge basicCharge, SmsOutgoingStage sms) {
+        _basicCharge = basicCharge;
+        _sms = sms;
+    }
 
     /** The SG10+SG11 detection pair wired to the rating flow — the ready instance. */
     public static CdrPipeline Default() { return new CdrPipeline(BasicCharge.Default()); }
+
+    /**
+     * The OUTGOING-SMS pipeline (Phase 1): every cdr is SG20 ({@link BasicCharge#SmsOutgoing} — no voice
+     * detection), rated SF10 with the calling+called composite matcher, qualified against the fixed SG20 checklist,
+     * and — unlike voice — POSTED: account create/update, {@code acc_transaction}, balances and
+     * {@code acc_ledger_summary}, in the same transaction as the cdr/chargeable/summary_affected writes.
+     * Built per batch: {@code catalog} and {@code accounting} are bound to that batch's connection.
+     */
+    public static CdrPipeline SmsOutgoing(SmsBillingRuleCatalog catalog, ISmsAccountingStore accounting,
+            Supplier<LocalDateTime> clock) {
+        return new CdrPipeline(BasicCharge.SmsOutgoing(catalog), new SmsOutgoingStage(catalog, accounting, clock));
+    }
+
+    public static CdrPipeline SmsOutgoing(SmsBillingRuleCatalog catalog, ISmsAccountingStore accounting) {
+        return SmsOutgoing(catalog, accounting, null);
+    }
+
+    /** True for the outgoing-SMS pipeline. */
+    public boolean IsSmsOutgoing() { return _sms != null; }
 
     public CdrBatchResult Process(CdrBatch batch) {
         // One id source for the whole batch, shared by the chargeable write (legacy IAutoIncrementManager).
@@ -77,7 +108,9 @@ public final class CdrPipeline {
             try {
                 var chargeables = _basicCharge.Rate(thisCdr, batch.Mediation(), batch.Partners());
 
-                var error = MediationValidator.Validate(thisCdr, batch.Mediation());
+                var error = _sms == null
+                        ? MediationValidator.Validate(thisCdr, batch.Mediation())
+                        : _sms.Validate(thisCdr, batch.Mediation());
                 // DURATION-BASED billing guard. The primary rule is duration, not the answered flag:
                 //   DurationSec == 0 => a legitimate FAILED call: NOT rated (legacy required no rate) — an empty
                 //                       chargeable is EXPECTED. It is written to the normal cdr table (call-attempt
@@ -91,13 +124,25 @@ public final class CdrPipeline {
                 boolean billable = thisCdr.DurationSec != null && thisCdr.DurationSec.signum() > 0;
                 if (billable && error.length() == 0 && !CustomerChargeGuard.HasCustomerLeg(chargeables))
                     error = "RATE_NOT_FOUND: no customer charge produced (no rate matched)";
-                if (error.length() > 0) { thisCdr.ErrorCode = Truncate(error, ErrorCodeMaxLen); errored.add(thisCdr); continue; }
+                if (error.length() > 0) { thisCdr.ErrorCode = Truncate(error, ErrorCap()); errored.add(thisCdr); continue; }
+                // SMS: the accounting key (billing rule + posting account) must resolve while the cdr can still
+                // go to cdrerror — a throw here routes it there instead of billing it without its ledger posting.
+                if (_sms != null) _sms.Qualify(thisCdr, chargeables);
 
                 rated.add(new RatedCdr(thisCdr, chargeables));
             } catch (RuntimeException mediationFailure) {
-                thisCdr.ErrorCode = Truncate("mediation failed: " + mediationFailure.getMessage(), ErrorCodeMaxLen);
+                thisCdr.ErrorCode = Truncate("mediation failed: " + mediationFailure.getMessage(), ErrorCap());
                 errored.add(thisCdr);
             }
+        }
+
+        // SMS ONLY — post the batch's accounting (accounts / acc_transaction / balances / acc_ledger_summary +
+        // the cdr meta totals and glAccountId on each chargeable) BEFORE the rows below are written, all in the
+        // same transaction; then fit the error rows to the narrower SMS cdrerror columns.
+        if (_sms != null) {
+            _sms.MarkMediation(rated, errored);
+            _sms.PostAccounting(batch.Sql(), rated, ids, batch.SegmentSize());
+            _sms.FitErrorRows(errored);
         }
 
         // PHASE 2 — Write (same single connection, segmented): the qualified cdr rows + their chargeables
@@ -126,6 +171,11 @@ public final class CdrPipeline {
      * message, never to a stalled pipeline.
      */
     private static final int ErrorCodeMaxLen = 512;
+
+    /** The ErrorCode cap for THIS pipeline: voice {@link #ErrorCodeMaxLen} (unchanged); SMS the SMS-schema cdrerror width (100). */
+    private int ErrorCap() {
+        return _sms == null ? ErrorCodeMaxLen : com.telcobright.billing.mediation.sms.SmsOutgoing.ErrorCodeMaxLen;
+    }
 
     private static String Truncate(String text, int max) {
         return text == null ? "" : text.length() <= max ? text : text.substring(0, max);

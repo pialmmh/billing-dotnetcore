@@ -22,8 +22,9 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
  */
 class SummaryEntityMappingTests {
 
-    /** The types every ROUTED service group folds into (SG10 -> _03, SG11 -> _02, SG15 -> _05). */
+    /** The types every ROUTED service group folds into (SG10 -> _03, SG11 -> _02, SG15 -> _05, SG20 -> _01). */
     private static final CdrSummaryType[] ROUTED = {
+            CdrSummaryType.sum_voice_day_01, CdrSummaryType.sum_voice_hr_01,   // SG20 outgoing SMS
             CdrSummaryType.sum_voice_day_02, CdrSummaryType.sum_voice_hr_02,
             CdrSummaryType.sum_voice_day_03, CdrSummaryType.sum_voice_hr_03,
             CdrSummaryType.sum_voice_day_05, CdrSummaryType.sum_voice_hr_05,

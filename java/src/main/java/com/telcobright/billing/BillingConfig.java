@@ -3,6 +3,7 @@ package com.telcobright.billing;
 import com.telcobright.billing.data.MySqlCdrBatchRunner;
 import com.telcobright.billing.data.MySqlConnectionFactory;
 import com.telcobright.billing.data.MySqlSummaryBatchRunner;
+import com.telcobright.billing.data.SmsIdAllocators;
 import com.telcobright.billing.mediation.rating.BasicCharge;
 import com.telcobright.billing.mediation.rating.FinalizeEngine;
 import com.telcobright.billing.mediation.rating.MaxRateEngine;
@@ -11,6 +12,7 @@ import com.telcobright.billing.tenantconfigsync.dependencies.CdrIngestOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.DatasourceOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.MediationOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.ProfileConfigReader;
+import com.telcobright.billing.tenantconfigsync.dependencies.SmsOutgoingOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.SummaryOutboxOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.SummaryRollupOptions;
 import com.telcobright.billing.tenantconfigsync.dependencies.TenantConfigSyncOptions;
@@ -86,6 +88,13 @@ public class BillingConfig {
         return ProfileConfigReader.ReadSummaryRollup(selection);
     }
 
+    /** billing.mediation.sms-outgoing — the outgoing-SMS Kafka intake (disabled unless fully configured). */
+    @Produces
+    @Singleton
+    public SmsOutgoingOptions smsOutgoingOptions(TenantSelection selection) {
+        return ProfileConfigReader.ReadSmsOutgoing(selection);
+    }
+
     // --- Tenant registry + the config-sync machinery ----------------------------------------------
     // One TenantRegistryState instance is produced; it is exposed as both ITenantRegistry (the read side
     // the handlers/CdrProcessor use) and as the concrete type the loader writes into.
@@ -137,6 +146,13 @@ public class BillingConfig {
     @Singleton
     public MySqlCdrBatchRunner cdrBatchRunner() {
         return MySqlCdrBatchRunner.Default();
+    }
+
+    /** The outgoing-SMS id sources (per schema, from autoincrementcounter — see {@link SmsIdAllocators}). */
+    @Produces
+    @Singleton
+    public SmsIdAllocators smsIdAllocators(MySqlConnectionFactory connections) {
+        return new SmsIdAllocators(connections);
     }
 
     @Produces

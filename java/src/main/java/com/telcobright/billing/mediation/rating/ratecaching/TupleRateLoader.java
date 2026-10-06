@@ -234,6 +234,9 @@ public final class TupleRateLoader implements IRateLoader {
         // Scrubbed HERE, at the one place a rate row enters the cache, so the cleaned value is what gets keyed
         // AND what flows downstream into acc_chargeable.Prefix / cdr.MatchedPrefixCustomer.
         e.Prefix = SanitizePrefix(r.Prefix, "rate " + r.id + " Prefix");
+        // The unsanitized value rides alongside for the SMS composite matcher only (0x1F = calling/called
+        // delimiter there); it never reaches the cache key above.
+        e.RawPrefix = r.Prefix;
         e.description = r.description;
         e.rateamount = r.rateamount;
         e.WeekDayStart = r.WeekDayStart;

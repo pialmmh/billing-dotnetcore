@@ -2,8 +2,12 @@ package com.telcobright.billing.beans;
 
 import com.telcobright.billing.data.CdrRowMapper;
 import com.telcobright.billing.data.MySqlCdrBatchRunner;
+import com.telcobright.billing.data.SmsIdAllocators;
+import com.telcobright.billing.mediation.sql.BatchSqlWriter;
 import com.telcobright.billing.data.MySqlConnectionFactory;
 import com.telcobright.billing.ingest.CdrKafkaConsumer;
+import com.telcobright.billing.ingest.sms.SmsCdrKafkaConsumer;
+import com.telcobright.billing.tenantconfigsync.dependencies.SmsOutgoingOptions;
 import com.telcobright.billing.mediation.cdr.CdrBatchResult;
 import com.telcobright.billing.mediation.engine.models.cdr;
 import com.telcobright.billing.tenantconfigsync.api.ITenantRegistry;
@@ -42,14 +46,17 @@ public class CdrProcessor {
     private final SummaryChangeNotificationPublisher summaryPublisher;
     private final CdrIngestOptions cdrIngest;
     private final MediationOptions mediation;
+    private final SmsOutgoingOptions smsOutgoing;
+    private final SmsIdAllocators smsAllocators;      // outgoing-SMS ids: every table from autoincrementcounter
 
     private CdrKafkaConsumer cdrConsumer;             // started on onStart when cdr ingest is enabled
+    private SmsCdrKafkaConsumer smsConsumer;          // started on onStart only when sms-outgoing is fully configured
 
     @Inject
     public CdrProcessor(ITenantRegistry tenants, MySqlConnectionFactory connections,
             MySqlCdrBatchRunner batchRunner, SummaryOutboxOptions summary,
             SummaryChangeNotificationPublisher summaryPublisher, CdrIngestOptions cdrIngest,
-            MediationOptions mediation) {
+            MediationOptions mediation, SmsOutgoingOptions smsOutgoing, SmsIdAllocators smsAllocators) {
         this.tenants = tenants;
         this.connections = connections;
         this.batchRunner = batchRunner;
@@ -57,6 +64,8 @@ public class CdrProcessor {
         this.summaryPublisher = summaryPublisher;
         this.cdrIngest = cdrIngest;
         this.mediation = mediation;
+        this.smsOutgoing = smsOutgoing;
+        this.smsAllocators = smsAllocators;
     }
 
     /** Startup seam: launch the inbound Kafka cdr ingest loop (poll -> preprocess -> ProcessBatch). When cdr
@@ -68,11 +77,48 @@ public class CdrProcessor {
             log.info("CdrProcessor started (gRPC-fed; Kafka cdr ingest loop not running)");
         else
             log.info("CdrProcessor started (Kafka cdr ingest loop running)");
+        // The outgoing-SMS intake is a SEPARATE consumer on its own topic; it stays off unless fully configured.
+        smsConsumer = SmsCdrKafkaConsumer.Start(this, tenants, smsOutgoing, mediation.SwitchId, log);
     }
 
     @PreDestroy
     void onStop() {
         if (cdrConsumer != null) cdrConsumer.stop();
+        if (smsConsumer != null) smsConsumer.stop();
+    }
+
+    /**
+     * Process ONE batch of OUTGOING SMS for the configured SMS tenant through the dedicated SMS pipeline: fixed SG20,
+     * calling+called composite rating, and legacy SG20 accounting (cdr + acc_chargeable + acc_transaction + account
+     * balance + acc_ledger_summary + summary_affected) in ONE transaction. Ids come from the shared
+     * {@code autoincrementcounter}. Never throws — a failure is returned as a non-committed result.
+     */
+    public CdrProcessingResult ProcessSmsOutgoingBatch(String tenant, List<cdr> cdrs) {
+        if (!smsOutgoing.IsSmsTenant(tenant))
+            return CdrProcessingResult.Failed("tenant '" + tenant + "' is not the configured outgoing-SMS tenant");
+        Tenant resolved = tenants.FindByDbName(tenant);
+        if (resolved == null)
+            return CdrProcessingResult.Failed("unknown tenant '" + tenant + "'");
+        if (!connections.IsConfigured())
+            return CdrProcessingResult.Failed("datasource credentials not configured");
+
+        CdrBatchResult r = null;
+        try (Connection conn = connections.Open(tenant)) {
+            r = batchRunner.RunSmsOutgoing(conn, resolved.Context.MediationContext, resolved.Context.Partners, cdrs,
+                    smsAllocators.For(tenant, smsOutgoing.IdBlockSize), BatchSqlWriter.DefaultSegmentSize,
+                    smsOutgoing.LegacyDedupEnabled, null);
+        } catch (Exception ex) {
+            if (r == null) {
+                log.error("ProcessSmsOutgoingBatch tenant=" + tenant + " rolled back", ex);
+                return CdrProcessingResult.Failed(ex.getMessage());
+            }
+            log.warn("ProcessSmsOutgoingBatch tenant=" + tenant + " committed, but closing the connection failed", ex);
+        }
+        if (summary.Enabled)
+            summaryPublisher.Publish(tenant, summary.EntityType, r.Rated().size());
+        log.infof("ProcessSmsOutgoingBatch tenant=%s sms=%d rated=%d errored=%d charged=%s",
+                tenant, cdrs.size(), r.Rated().size(), r.Errored().size(), r.TotalCharged());
+        return CdrProcessingResult.Ok(r);
     }
 
     /**
@@ -126,6 +172,10 @@ public class CdrProcessor {
      * {@code errorCode} (optional) to one reason, {@code limit} caps the batch. Never throws.
      */
     public CdrProcessingResult ReprocessErrors(String tenant, String errorCode, boolean onlySuccessful, int limit) {
+        // Phase-1 boundary: no reprocessing on the outgoing-SMS tenant (it would re-rate SG20 rows through the VOICE
+        // pipeline). The FileName='kafka:cdr' filter below already excludes 'kafka:sms' rows; this refuses up front.
+        if (smsOutgoing.IsSmsTenant(tenant))
+            return CdrProcessingResult.Failed("ReprocessErrors is not supported for the outgoing-SMS tenant '" + tenant + "'");
         Tenant resolved = tenants.FindByDbName(tenant);
         if (resolved == null)
             return CdrProcessingResult.Failed("unknown tenant '" + tenant + "'");

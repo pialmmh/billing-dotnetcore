@@ -32,7 +32,9 @@ public final class CdrSummaryContext {
             10, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_03, CdrSummaryType.sum_voice_hr_03 },
             11, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_02, CdrSummaryType.sum_voice_hr_02 },
             // SG15 international-outgoing → sum_voice_*_05 (verified against production; legacy source said _02).
-            15, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_05, CdrSummaryType.sum_voice_hr_05 });
+            15, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_05, CdrSummaryType.sum_voice_hr_05 },
+            // SG20 domestic outgoing SMS → sum_voice_*_01 (legacy SgDomSmsOffnetOut).
+            20, new CdrSummaryType[] { CdrSummaryType.sum_voice_day_01, CdrSummaryType.sum_voice_hr_01 });
 
     private final ISummaryStore _store;
     private final IAutoIncrementManager _ids;

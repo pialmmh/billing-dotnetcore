@@ -34,6 +34,13 @@ public class Rateext extends rate {
     public String TechPrefix;
     public String Pcurrency;
 
+    /**
+     * The rate row's {@code Prefix} EXACTLY as served — before {@code TupleRateLoader.SanitizePrefix}. Only the
+     * SMS composite matcher reads it: an SMS rate prefix is {@code <callingPrefix>0x1F<calledPrefix>}, and the
+     * 0x1F is the delimiter, not junk. {@code Prefix} (sanitized) keeps keying the voice cache unchanged.
+     */
+    public String RawPrefix;
+
     // NOTE: C# `Nullable<int>.ToString()` yields "" when null (NOT "null"); preserved verbatim below.
     public String PrefixWithTechPrefix(Map<String, rateplan> dicRatePlan) {
         return dicRatePlan.get(this.idrateplan != null ? this.idrateplan.toString() : "").field4 + this.Prefix;
