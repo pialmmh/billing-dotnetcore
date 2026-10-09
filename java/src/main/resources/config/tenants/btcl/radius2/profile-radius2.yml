@@ -1,0 +1,77 @@
+# =====================================================================================
+# btcl / radius2 — billing-core on the radius-2 bed (bras-2), the ad lane: the ad view as a Call.
+#
+# The ONE PostgreSQL of the bed (the owner, 2026-10-10: single db instance, single prime-context instance, no duplication, one Kafka
+# cluster): the switch database `routesphere` on pair2 :5434, a tenant = a schema of it (btcl, and the resellers prime-context
+# provisions at run time: res_<n>). The tree comes from the bed's one prime-context, the facade on :7091. The topics are named by
+# the ROOT tenant (the owner's Kafka rule, 2026-10-10: every topic suffixed by the operator tenant; a nested reseller gets none of
+# its own). The keys: docs/postgres-tenant-profile.md. The secrets: by the NAME of their variable only (secreteer's
+# /etc/secreteer/btcl/billing-core.env through the unit's EnvironmentFile=); never a value here.
+# The listener (10.10.188.2:7133) and the zone (Asia/Dhaka) are the unit's java line (-Dquarkus.http.host/port, -Duser.timezone).
+# =====================================================================================
+
+billing:
+  tenant:
+    profiles:
+      radius2:
+        name: "btcl radius-2 bed"
+        active: true
+        environment: "bed"
+
+  # The tenant tree: prime-context, on the same roads config-manager has. The bed's one instance, the facade, upgraded in place.
+  config-manager:
+    base-url: "http://10.10.188.2:7091"
+    tenant-root-endpoint: "/get-specific-tenant-root"
+    global-registry-endpoint: "/get-global-tenant-registry"
+    timeout-seconds: 180
+
+  # The doorbell: prime-context rings config_event_loader_<root> AFTER it rebuilt the tree.
+  config-events:
+    enabled: true
+    bootstrap-servers: "10.10.188.2:9092"
+    event-topic-base: "config_event_loader"               # the topic is <base>_<root tenant> = config_event_loader_btcl
+    consumer-group-base: "billing-core-config-reload"
+    debounce-ms: 3000
+    idle-fast-path-multiplier: 2
+
+  # The write target: the one switch database; a tenant is a schema of it, served with currentSchema=<tenant>.
+  datasource:
+    kind: postgresql
+    host: "127.0.0.1"                                      # pair2's PostgreSQL on this box
+    port: 5434
+    database: "routesphere"
+    username: "billing_core"                               # USAGE + CREATE on every tenant schema: prime-context's provisioning gives both
+    password-ref: "env:TENANT_BTCL_AD_BILLING_CORE_PASSWORD"   # the NAME of the variable (/etc/secreteer/btcl/billing-core.env); never the value
+    postgres:
+      summary-service-role: "summary_service"              # SELECT on cdr / cdrerror / acc_chargeable; SELECT + DELETE on summary_affected
+      reader-roles: ["ad_sphere"]                          # SELECT on the four tables (ad-sphere's report roads)
+      months-back: 1
+      months-ahead: 3
+
+  # The inbound CDR stream: ad-sphere publishes one record per view per tier on cdr_<root> (key = channelCallUuid).
+  cdr-ingest:
+    enabled: true
+    bootstrap-servers: "10.10.188.2:9092"
+    topic: "cdr_btcl"                                      # cdr_<root tenant>
+    dead-letter-topic: "cdr_dlq_btcl"                      # cdr_dlq_<root tenant>; it must EXIST or the ingest consumes nothing (health DOWN, in words)
+    consumer-group: "billing-core-cdr-ingest"
+    auto-offset-reset: "earliest"                          # a new group skips nothing
+    dead-letter-unhealthy-after-tries: 3
+    unknown-tenant-reload-seconds: 30
+    poll-ms: 500
+
+  mediation:
+    voice-enabled: true                                    # an ad view is a pre-rated record of service group 30, stated by the message (B2/B3)
+    sms-enabled: false
+    reseller-fanout-enabled: false                         # each tier's record is its own (ad-sphere writes one per tier)
+    switch-id: 1                                           # ad-sphere's route.switch-id on this bed
+
+  # The summary hand-off: the outbox row is always written; the ping only cuts the summary service's latency.
+  summary:
+    enabled: true
+    entity-type: "cdr"
+    ping-topic: "cdr_summary_ping_btcl"                    # named by the ROOT; the same name in summary-service's profile
+    bootstrap-servers: "10.10.188.2:9092"
+
+  summary-rollup:
+    enabled: false                                         # MUST stay off on PostgreSQL (refused at start otherwise); summary-service folds
